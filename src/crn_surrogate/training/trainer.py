@@ -18,6 +18,7 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.losses import CombinedTrajectoryLoss, TrajectoryLoss
+from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
 
 
 @dataclass
@@ -74,6 +75,21 @@ class Trainer:
         self._scheduler = self._build_scheduler()
         self._best_val_loss = float("inf")
 
+        device = next(encoder.parameters(), torch.zeros(1)).device
+        self._timer = PhaseTimer(device=device)
+        self._csv_logger = ProfileLogger(train_config.log_dir)
+        self._wandb: WandbLogger | None = None
+        if train_config.use_wandb:
+            import dataclasses
+            self._wandb = WandbLogger(
+                config={
+                    **dataclasses.asdict(train_config),
+                    **dataclasses.asdict(model_config),
+                },
+                project=train_config.wandb_project,
+                run_name=train_config.wandb_run_name,
+            )
+
     def train(
         self,
         train_dataset: CRNTrajectoryDataset,
@@ -98,6 +114,7 @@ class Trainer:
         )
 
         for epoch in range(1, self._train_config.max_epochs + 1):
+            self._timer = PhaseTimer(device=self._timer.device)
             train_loss = self._train_epoch(train_loader)
             result.train_losses.append(train_loss)
 
@@ -111,7 +128,18 @@ class Trainer:
             else:
                 print(f"Epoch {epoch:4d} | train={train_loss:.4f}")
 
+            self._csv_logger.log_epoch(epoch, self._timer)
+            if self._wandb is not None:
+                metrics: dict = {"epoch": epoch, "train_loss": train_loss}
+                if val_loss is not None:
+                    metrics["val_loss"] = val_loss
+                self._wandb.log_epoch(metrics)
+                self._wandb.log_phase_timings(self._timer)
+
             self._step_scheduler(val_loss)
+
+        if self._wandb is not None:
+            self._wandb.finish()
 
         return result
 
@@ -123,16 +151,23 @@ class Trainer:
         n_batches = 0
 
         for batch in tqdm(loader, desc="train", leave=False):
-            loss = self._compute_batch_loss(batch)
+            self._timer.start_batch(n_batches=n_batches)
+
+            with self._timer.time("forward"):
+                loss = self._compute_batch_loss(batch)
+
             self._optimizer.zero_grad()
-            loss.backward()
+            with self._timer.time("backward"):
+                loss.backward()
             nn.utils.clip_grad_norm_(
                 list(self._encoder.parameters()) + list(self._sde.parameters()),
                 self._train_config.grad_clip_norm,
             )
             self._optimizer.step()
+
             total_loss += loss.item()
             n_batches += 1
+            self._timer.end_batch()
 
         return total_loss / max(n_batches, 1)
 

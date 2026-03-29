@@ -17,9 +17,11 @@ pip install -e .
 
 ## Quick start
 
-```bash
-python main.py
-```
+See `notebooks/` for worked examples:
+
+- `01_simulation.ipynb` — run Gillespie SSA and Neural SDE side-by-side
+- `02_training_data.ipynb` — build a `CRNTrajectoryDataset`
+- `03_training.ipynb` — full training loop with optional W&B logging
 
 ## Run tests
 
@@ -27,17 +29,40 @@ python main.py
 pytest
 ```
 
+## Profiling & Weights & Biases
+
+The `Trainer` automatically records per-batch phase timings (`forward`, `backward`) using `PhaseTimer` and writes two CSV files to `TrainingConfig.log_dir` after each epoch:
+
+| File | Contents |
+|------|----------|
+| `profiler_batches.csv` | One row per training batch with `forward_s`, `backward_s`, GPU memory |
+| `profiler_epochs.csv` | One row per phase per epoch: mean / std / min / max / total seconds |
+
+To enable Weights & Biases logging, set `use_wandb=True` in `TrainingConfig`:
+
+```python
+from crn_surrogate.configs.training_config import TrainingConfig
+
+config = TrainingConfig(
+    use_wandb=True,
+    wandb_project="my-project",   # optional, default "crn-surrogate"
+    wandb_run_name="run-01",      # optional
+)
+```
+
+This requires `wandb` to be installed (`pip install wandb`) and a prior `wandb login`.
+
 ## Project structure
 
 ```
-crn_surrogate/
-├── configs/          # Frozen dataclass configurations
+src/crn_surrogate/
+├── configs/          # Frozen dataclass configurations (ModelConfig, TrainingConfig)
 ├── data/             # CRN definitions, propensities, Gillespie SSA, dataset
 ├── encoder/          # Bipartite GNN encoder
 ├── simulator/        # Neural SDE + Euler-Maruyama solver
-└── training/         # Loss functions and training loop
+└── training/         # Loss functions, training loop, profiler
 tests/
-main.py
+notebooks/
 ```
 
 ## License
