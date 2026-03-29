@@ -6,7 +6,6 @@ These tests exercise complete pipelines across all subsystems:
 - Trainer.train() runs without error and produces a valid TrainingResult.
 """
 
-
 import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
