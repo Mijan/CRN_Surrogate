@@ -8,12 +8,11 @@ Covers:
   and sets species/reaction masks correctly.
 """
 
-import torch
 import pytest
+import torch
 
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset, TrajectoryItem
 from crn_surrogate.data.gillespie import birth_death_crn, lotka_volterra_crn
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

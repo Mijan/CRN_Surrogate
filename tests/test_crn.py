@@ -10,12 +10,10 @@ Covers:
 """
 
 import pytest
-import torch
 
-from crn_surrogate.data.crn import CRNDefinition, build_bipartite_edges
+from crn_surrogate.data.crn import build_bipartite_edges
 from crn_surrogate.data.gillespie import birth_death_crn, lotka_volterra_crn
 from crn_surrogate.data.propensities import PropensityType
-
 
 # ── CRNDefinition structure ───────────────────────────────────────────────────
 
@@ -95,6 +93,8 @@ def test_bipartite_edges_lotka_volterra_has_more_edges_than_birth_death():
     edges_lv = build_bipartite_edges(
         lotka_volterra_crn().stoichiometry, lotka_volterra_crn().reactant_matrix
     )
-    assert edges_lv.rxn_to_species_index.shape[1] > edges_bd.rxn_to_species_index.shape[1]
+    assert (
+        edges_lv.rxn_to_species_index.shape[1] > edges_bd.rxn_to_species_index.shape[1]
+    )
     assert edges_bd.rxn_to_species_index.shape[1] == 2
     assert edges_lv.rxn_to_species_index.shape[1] == 4

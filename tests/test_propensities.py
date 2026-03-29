@@ -16,7 +16,6 @@ from crn_surrogate.data.propensities import (
     make_propensity,
 )
 
-
 # ── MassActionPropensity ──────────────────────────────────────────────────────
 
 

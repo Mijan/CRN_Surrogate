@@ -14,7 +14,6 @@ from crn_surrogate.configs.model_config import EncoderConfig
 from crn_surrogate.data.gillespie import birth_death_crn, lotka_volterra_crn
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 
-
 # ── Output shapes ─────────────────────────────────────────────────────────────
 
 
@@ -47,7 +46,7 @@ def test_encoder_context_vector_dimension_is_twice_d_model():
         encoder = BipartiteGNNEncoder(EncoderConfig(d_model=d_model, n_layers=1))
         ctx = encoder(birth_death_crn(), torch.tensor([1.0]))
         assert ctx.context_vector.shape[0] == 2 * d_model, (
-            f"d_model={d_model}: expected context dim {2*d_model}, "
+            f"d_model={d_model}: expected context dim {2 * d_model}, "
             f"got {ctx.context_vector.shape[0]}"
         )
 

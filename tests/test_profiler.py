@@ -9,14 +9,11 @@ Verifies:
 """
 
 import csv
-import os
 import time
 
 import pytest
-import torch
 
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger
-
 
 # ── PhaseTimer — phase timing ─────────────────────────────────────────────────
 
@@ -133,10 +130,21 @@ def test_profile_logger_epoch_csv_has_correct_header(tmp_path, timer_with_one_ep
     logger.log_epoch(epoch=1, timer=timer_with_one_epoch)
     with open(tmp_path / "profiler_epochs.csv") as f:
         header = next(csv.reader(f))
-    assert header == ["epoch", "phase", "mean_s", "std_s", "min_s", "max_s", "total_s", "n"]
+    assert header == [
+        "epoch",
+        "phase",
+        "mean_s",
+        "std_s",
+        "min_s",
+        "max_s",
+        "total_s",
+        "n",
+    ]
 
 
-def test_profile_logger_epoch_csv_row_count_matches_phases(tmp_path, timer_with_one_epoch):
+def test_profile_logger_epoch_csv_row_count_matches_phases(
+    tmp_path, timer_with_one_epoch
+):
     """After logging one epoch with two phases, epoch CSV has exactly 2 data rows."""
     logger = ProfileLogger(str(tmp_path))
     logger.log_epoch(epoch=1, timer=timer_with_one_epoch)

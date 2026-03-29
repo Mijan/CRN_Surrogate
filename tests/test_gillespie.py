@@ -19,7 +19,6 @@ from crn_surrogate.data.gillespie import (
     lotka_volterra_crn,
 )
 
-
 # ── GillespieSSA ──────────────────────────────────────────────────────────────
 
 
@@ -93,9 +92,9 @@ def test_interpolate_to_grid_zero_order_hold_semantics():
 
     result = interpolate_to_grid(event_times, event_states, grid)
 
-    assert result[0, 0].item() == pytest.approx(0.0)   # 0.5 → event at t=0
-    assert result[1, 0].item() == pytest.approx(1.0)   # 1.5 → event at t=1
-    assert result[2, 0].item() == pytest.approx(2.0)   # 2.5 → event at t=2
+    assert result[0, 0].item() == pytest.approx(0.0)  # 0.5 → event at t=0
+    assert result[1, 0].item() == pytest.approx(1.0)  # 1.5 → event at t=1
+    assert result[2, 0].item() == pytest.approx(2.0)  # 2.5 → event at t=2
 
 
 def test_interpolate_to_grid_grid_point_at_exact_event_time():
