@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import torch
 import torch.nn as nn
+
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 
@@ -13,8 +15,8 @@ class FiLMLayer(nn.Module):
 
     def __init__(self, d_context: int, d_features: int) -> None:
         """Args:
-            d_context: Dimension of the conditioning context vector.
-            d_features: Dimension of the features to modulate.
+        d_context: Dimension of the conditioning context vector.
+        d_features: Dimension of the features to modulate.
         """
         super().__init__()
         self._gamma = nn.Linear(d_context, d_features)
@@ -46,8 +48,8 @@ class CRNNeuralSDE(nn.Module):
 
     def __init__(self, config: SDEConfig, n_species: int) -> None:
         """Args:
-            config: SDE configuration.
-            n_species: Number of species (state dimension).
+        config: SDE configuration.
+        n_species: Number of species (state dimension).
         """
         super().__init__()
         self._config = config

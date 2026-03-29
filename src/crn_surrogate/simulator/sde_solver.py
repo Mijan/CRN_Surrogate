@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import torch
+
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
@@ -14,7 +16,7 @@ class EulerMaruyamaSolver:
 
     def __init__(self, config: SDEConfig) -> None:
         """Args:
-            config: SDE configuration (clip_state flag lives here).
+        config: SDE configuration (clip_state flag lives here).
         """
         self._config = config
 
@@ -41,7 +43,9 @@ class EulerMaruyamaSolver:
         t_start = t_span[0].item()
         t_end = t_span[-1].item()
         n_steps = max(1, int((t_end - t_start) / dt))
-        time_grid = torch.linspace(t_start, t_end, n_steps + 1, device=initial_state.device)
+        time_grid = torch.linspace(
+            t_start, t_end, n_steps + 1, device=initial_state.device
+        )
 
         state = initial_state.clone().float()
         recorded_states = []
@@ -78,7 +82,7 @@ class EulerMaruyamaSolver:
         z = torch.randn(g.shape[-1], device=state.device)
         noise = (g * z.unsqueeze(0)).sum(dim=-1)
 
-        new_state = state + f * dt + noise * (dt ** 0.5)
+        new_state = state + f * dt + noise * (dt**0.5)
 
         if self._config.clip_state:
             new_state = new_state.clamp(min=0.0)

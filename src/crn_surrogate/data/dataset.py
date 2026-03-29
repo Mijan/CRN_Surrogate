@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 import torch
 from torch.utils.data import Dataset
+
 from crn_surrogate.data.crn import CRNDefinition
 
 
@@ -18,9 +21,9 @@ class TrajectoryItem:
     """
 
     crn: CRNDefinition
-    initial_state: torch.Tensor   # (n_species,)
-    trajectories: torch.Tensor    # (M, T, n_species)
-    times: torch.Tensor           # (T,)
+    initial_state: torch.Tensor  # (n_species,)
+    trajectories: torch.Tensor  # (M, T, n_species)
+    times: torch.Tensor  # (T,)
 
 
 class CRNTrajectoryDataset(Dataset):
@@ -32,7 +35,7 @@ class CRNTrajectoryDataset(Dataset):
 
     def __init__(self, items: list[TrajectoryItem]) -> None:
         """Args:
-            items: List of pre-generated TrajectoryItem instances.
+        items: List of pre-generated TrajectoryItem instances.
         """
         self._items = items
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+
 import torch
+
 from crn_surrogate.data.propensities import PropensityType
 
 

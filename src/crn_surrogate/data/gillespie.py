@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 import torch
+
 from crn_surrogate.data.crn import CRNDefinition
 from crn_surrogate.data.propensities import make_propensity
 from crn_surrogate.simulator.trajectory import Trajectory
@@ -66,10 +68,12 @@ class GillespieSSA:
         crn: CRNDefinition,
     ) -> torch.Tensor:
         """Evaluate all propensities for the current state."""
-        a = torch.stack([
-            propensities[r].evaluate(state, crn.propensity_params[r])
-            for r in range(crn.n_reactions)
-        ])
+        a = torch.stack(
+            [
+                propensities[r].evaluate(state, crn.propensity_params[r])
+                for r in range(crn.n_reactions)
+            ]
+        )
         return a.clamp(min=0.0)
 
     def _sample_wait_time(self, a_total: torch.Tensor) -> torch.Tensor:
@@ -105,6 +109,7 @@ def interpolate_to_grid(
 
 # ── Reference CRN library ────────────────────────────────────────────────────
 
+
 def birth_death_crn(k1: float = 1.0, k2: float = 0.5) -> CRNDefinition:
     """Birth-death process: ∅ → A (rate k1), A → ∅ (rate k2).
 
@@ -118,6 +123,7 @@ def birth_death_crn(k1: float = 1.0, k2: float = 0.5) -> CRNDefinition:
         CRNDefinition for the birth-death process.
     """
     from crn_surrogate.data.propensities import PropensityType
+
     stoich = torch.tensor([[1.0], [-1.0]])
     reactants = torch.tensor([[0.0], [1.0]])
     params = torch.tensor([[k1, 0.0, 0.0, 0.0], [k2, 0.0, 0.0, 0.0]])
@@ -130,7 +136,9 @@ def birth_death_crn(k1: float = 1.0, k2: float = 0.5) -> CRNDefinition:
     )
 
 
-def lotka_volterra_crn(k1: float = 1.0, k2: float = 0.01, k3: float = 0.5) -> CRNDefinition:
+def lotka_volterra_crn(
+    k1: float = 1.0, k2: float = 0.01, k3: float = 0.5
+) -> CRNDefinition:
     """Lotka-Volterra predator-prey: A→2A, A+B→2B, B→∅.
 
     Args:
@@ -142,22 +150,29 @@ def lotka_volterra_crn(k1: float = 1.0, k2: float = 0.01, k3: float = 0.5) -> CR
         CRNDefinition for Lotka-Volterra dynamics.
     """
     from crn_surrogate.data.propensities import PropensityType
+
     # species: [A (prey), B (predator)]
-    stoich = torch.tensor([
-        [1.0, 0.0],   # A → 2A
-        [-1.0, 1.0],  # A+B → 2B
-        [0.0, -1.0],  # B → ∅
-    ])
-    reactants = torch.tensor([
-        [1.0, 0.0],
-        [1.0, 1.0],
-        [0.0, 1.0],
-    ])
-    params = torch.tensor([
-        [k1, 0.0, 0.0, 0.0],
-        [k2, 0.0, 0.0, 0.0],
-        [k3, 0.0, 0.0, 0.0],
-    ])
+    stoich = torch.tensor(
+        [
+            [1.0, 0.0],  # A → 2A
+            [-1.0, 1.0],  # A+B → 2B
+            [0.0, -1.0],  # B → ∅
+        ]
+    )
+    reactants = torch.tensor(
+        [
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+        ]
+    )
+    params = torch.tensor(
+        [
+            [k1, 0.0, 0.0, 0.0],
+            [k2, 0.0, 0.0, 0.0],
+            [k3, 0.0, 0.0, 0.0],
+        ]
+    )
     return CRNDefinition(
         stoichiometry=stoich,
         reactant_matrix=reactants,
@@ -171,7 +186,9 @@ def lotka_volterra_crn(k1: float = 1.0, k2: float = 0.01, k3: float = 0.5) -> CR
     )
 
 
-def schlogl_crn(k1: float = 3e-7, k2: float = 1e-4, k3: float = 1e-3, k4: float = 3.5) -> CRNDefinition:
+def schlogl_crn(
+    k1: float = 3e-7, k2: float = 1e-4, k3: float = 1e-3, k4: float = 3.5
+) -> CRNDefinition:
     """Schlögl model: bistable single-species network.
 
     Reactions (species A, buffer B held constant at B=1e5):
@@ -190,16 +207,19 @@ def schlogl_crn(k1: float = 3e-7, k2: float = 1e-4, k3: float = 1e-3, k4: float 
         CRNDefinition for the Schlögl model (1 species, 4 reactions).
     """
     from crn_surrogate.data.propensities import PropensityType
+
     # Absorb buffer B = 1e5 into k1
     k1_eff = k1 * 1e5
     stoich = torch.tensor([[1.0], [-1.0], [1.0], [-1.0]])
     reactants = torch.tensor([[2.0], [3.0], [0.0], [1.0]])
-    params = torch.tensor([
-        [k1_eff, 0.0, 0.0, 0.0],
-        [k2, 0.0, 0.0, 0.0],
-        [k3, 0.0, 0.0, 0.0],
-        [k4, 0.0, 0.0, 0.0],
-    ])
+    params = torch.tensor(
+        [
+            [k1_eff, 0.0, 0.0, 0.0],
+            [k2, 0.0, 0.0, 0.0],
+            [k3, 0.0, 0.0, 0.0],
+            [k4, 0.0, 0.0, 0.0],
+        ]
+    )
     return CRNDefinition(
         stoichiometry=stoich,
         reactant_matrix=reactants,
@@ -237,24 +257,31 @@ def toggle_switch_crn(
         CRNDefinition for the toggle switch.
     """
     from crn_surrogate.data.propensities import PropensityType
-    stoich = torch.tensor([
-        [1.0, 0.0],
-        [-1.0, 0.0],
-        [0.0, 1.0],
-        [0.0, -1.0],
-    ])
-    reactants = torch.tensor([
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [0.0, 0.0],
-        [0.0, 1.0],
-    ])
-    params = torch.tensor([
-        [v_max1, k_m1, n1, 1.0],  # Hill, repressed by B (index 1)
-        [d1, 0.0, 0.0, 0.0],
-        [v_max2, k_m2, n2, 0.0],  # Hill, repressed by A (index 0)
-        [d2, 0.0, 0.0, 0.0],
-    ])
+
+    stoich = torch.tensor(
+        [
+            [1.0, 0.0],
+            [-1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, -1.0],
+        ]
+    )
+    reactants = torch.tensor(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 1.0],
+        ]
+    )
+    params = torch.tensor(
+        [
+            [v_max1, k_m1, n1, 1.0],  # Hill, repressed by B (index 1)
+            [d1, 0.0, 0.0, 0.0],
+            [v_max2, k_m2, n2, 0.0],  # Hill, repressed by A (index 0)
+            [d2, 0.0, 0.0, 0.0],
+        ]
+    )
     return CRNDefinition(
         stoichiometry=stoich,
         reactant_matrix=reactants,
@@ -287,30 +314,37 @@ def mapk_cascade_crn(
         CRNDefinition for the MAPK cascade.
     """
     from crn_surrogate.data.propensities import PropensityType
-    stoich = torch.tensor([
-        [1.0, 0.0, 0.0],   # ∅ → MAPKKK*  (input activation)
-        [-1.0, 0.0, 0.0],  # MAPKKK* → ∅  (deactivation)
-        [0.0, 1.0, 0.0],   # MAPKKK* → MAPKK*  (activation by MAPKKK*)
-        [0.0, -1.0, 0.0],  # MAPKK* → ∅
-        [0.0, 0.0, 1.0],   # MAPKK* → MAPK*
-        [0.0, 0.0, -1.0],  # MAPK* → ∅
-    ])
-    reactants = torch.tensor([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ])
-    params = torch.tensor([
-        [k_act, 0.0, 0.0, 0.0],
-        [k_deact, 0.0, 0.0, 0.0],
-        [k_act, 0.0, 0.0, 0.0],
-        [k_deact, 0.0, 0.0, 0.0],
-        [k_act, 0.0, 0.0, 0.0],
-        [k_deact, 0.0, 0.0, 0.0],
-    ])
+
+    stoich = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],  # ∅ → MAPKKK*  (input activation)
+            [-1.0, 0.0, 0.0],  # MAPKKK* → ∅  (deactivation)
+            [0.0, 1.0, 0.0],  # MAPKKK* → MAPKK*  (activation by MAPKKK*)
+            [0.0, -1.0, 0.0],  # MAPKK* → ∅
+            [0.0, 0.0, 1.0],  # MAPKK* → MAPK*
+            [0.0, 0.0, -1.0],  # MAPK* → ∅
+        ]
+    )
+    reactants = torch.tensor(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    params = torch.tensor(
+        [
+            [k_act, 0.0, 0.0, 0.0],
+            [k_deact, 0.0, 0.0, 0.0],
+            [k_act, 0.0, 0.0, 0.0],
+            [k_deact, 0.0, 0.0, 0.0],
+            [k_act, 0.0, 0.0, 0.0],
+            [k_deact, 0.0, 0.0, 0.0],
+        ]
+    )
     return CRNDefinition(
         stoichiometry=stoich,
         reactant_matrix=reactants,

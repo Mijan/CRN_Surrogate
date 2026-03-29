@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 import torch
 
 
@@ -11,6 +13,7 @@ class Trajectory:
         times: (T,) time points.
         states: (T, n_species) molecule counts or concentrations at each time.
     """
+
     times: torch.Tensor
     states: torch.Tensor
 

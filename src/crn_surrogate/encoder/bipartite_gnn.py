@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
+
 from crn_surrogate.configs.model_config import EncoderConfig
-from crn_surrogate.data.crn import CRNDefinition, build_bipartite_edges, BipartiteEdges
-from crn_surrogate.encoder.embeddings import SpeciesEmbedding, ReactionEmbedding
+from crn_surrogate.data.crn import CRNDefinition, build_bipartite_edges
+from crn_surrogate.encoder.embeddings import ReactionEmbedding, SpeciesEmbedding
 from crn_surrogate.encoder.message_passing import MessagePassingLayer
 
 
@@ -17,6 +20,7 @@ class CRNContext:
         reaction_embeddings: (n_reactions, d_model)
         context_vector: (2 * d_model,) — mean-pooled species + mean-pooled reactions
     """
+
     species_embeddings: torch.Tensor
     reaction_embeddings: torch.Tensor
     context_vector: torch.Tensor
@@ -31,15 +35,15 @@ class BipartiteGNNEncoder(nn.Module):
 
     def __init__(self, config: EncoderConfig) -> None:
         """Args:
-            config: Encoder configuration.
+        config: Encoder configuration.
         """
         super().__init__()
         self._config = config
         self._species_embed = SpeciesEmbedding(config)
         self._reaction_embed = ReactionEmbedding(config)
-        self._layers = nn.ModuleList([
-            MessagePassingLayer(config.d_model) for _ in range(config.n_layers)
-        ])
+        self._layers = nn.ModuleList(
+            [MessagePassingLayer(config.d_model) for _ in range(config.n_layers)]
+        )
 
     def forward(
         self,

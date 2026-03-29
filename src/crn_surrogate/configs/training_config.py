@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -19,9 +20,9 @@ class TrainingConfig:
     max_epochs: int = 100
     batch_size: int = 16
     grad_clip_norm: float = 1.0
-    n_sde_samples: int = 8           # K parallel SDE rollouts per training item
-    n_ssa_samples: int = 32          # M independent SSA trajectories per dataset item
-    dt: float = 0.1                  # Euler-Maruyama step size
+    n_sde_samples: int = 8  # K parallel SDE rollouts per training item
+    n_ssa_samples: int = 32  # M independent SSA trajectories per dataset item
+    dt: float = 0.1  # Euler-Maruyama step size
     val_every: int = 10
     checkpoint_dir: str = "checkpoints"
     log_dir: str = "logs"

@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import torch
 import torch.nn as nn
+
 from crn_surrogate.configs.model_config import EncoderConfig
 
 
@@ -12,7 +14,7 @@ class SpeciesEmbedding(nn.Module):
 
     def __init__(self, config: EncoderConfig) -> None:
         """Args:
-            config: Encoder configuration.
+        config: Encoder configuration.
         """
         super().__init__()
         self._config = config
@@ -38,7 +40,7 @@ class ReactionEmbedding(nn.Module):
 
     def __init__(self, config: EncoderConfig) -> None:
         """Args:
-            config: Encoder configuration.
+        config: Encoder configuration.
         """
         super().__init__()
         self._config = config

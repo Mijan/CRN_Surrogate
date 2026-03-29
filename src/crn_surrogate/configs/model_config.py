@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -11,8 +12,8 @@ class EncoderConfig:
     """Configuration for the bipartite GNN encoder."""
 
     d_model: int = 64
-    n_layers: int = 3               # 3 rounds of message passing is sufficient for small CRNs
-    n_propensity_types: int = 8     # embedding table size
+    n_layers: int = 3  # 3 rounds of message passing is sufficient for small CRNs
+    n_propensity_types: int = 8  # embedding table size
     max_propensity_params: int = 4
     dropout: float = 0.0
 
@@ -34,11 +35,17 @@ class SDEConfig:
 
     d_model: int = 64
     d_hidden: int = 128
-    n_noise_channels: int = 16      # override with from_crn() for CLE-correct noise dim
-    clip_state: bool = True         # clamp X >= 0 after each Euler-Maruyama step
+    n_noise_channels: int = 16  # override with from_crn() for CLE-correct noise dim
+    clip_state: bool = True  # clamp X >= 0 after each Euler-Maruyama step
 
     @classmethod
-    def from_crn(cls, crn: "CRNDefinition", **kwargs: object) -> "SDEConfig":
+    def from_crn(
+        cls,
+        crn: "CRNDefinition",
+        d_model: int = 64,
+        d_hidden: int = 128,
+        clip_state: bool = True,
+    ) -> "SDEConfig":
         """Create SDEConfig with n_noise_channels = crn.n_reactions.
 
         This matches the Chemical Langevin Equation where each reaction drives
@@ -46,12 +53,19 @@ class SDEConfig:
 
         Args:
             crn: CRN definition whose n_reactions sets n_noise_channels.
-            **kwargs: Additional fields to override (d_model, d_hidden, etc.).
+            d_model: Hidden dimension for conditioning.
+            d_hidden: Hidden dimension inside the drift/diffusion MLPs.
+            clip_state: Whether to clamp state to [0, ∞) after each step.
 
         Returns:
             SDEConfig with n_noise_channels set to crn.n_reactions.
         """
-        return cls(n_noise_channels=crn.n_reactions, **kwargs)
+        return cls(
+            d_model=d_model,
+            d_hidden=d_hidden,
+            n_noise_channels=crn.n_reactions,
+            clip_state=clip_state,
+        )
 
     def __repr__(self) -> str:
         return (

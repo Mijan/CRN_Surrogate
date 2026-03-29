@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
+
 import torch
 
 
@@ -64,12 +66,12 @@ class MeanMatchingLoss(TrajectoryLoss):
             Scalar loss tensor.
         """
         self._validate_3d(pred_states, true_states)
-        pred_mean = pred_states.mean(dim=0)   # (T, n_species)
-        true_mean = true_states.mean(dim=0)   # (T, n_species)
+        pred_mean = pred_states.mean(dim=0)  # (T, n_species)
+        true_mean = true_states.mean(dim=0)  # (T, n_species)
         diff = pred_mean - true_mean
         if mask is not None:
             diff = diff * mask.float()
-        return (diff ** 2).mean()
+        return (diff**2).mean()
 
 
 class VarianceMatchingLoss(TrajectoryLoss):
@@ -112,15 +114,15 @@ class VarianceMatchingLoss(TrajectoryLoss):
             raise ValueError(
                 f"VarianceMatchingLoss requires M >= 2 true trajectories, got M={M}"
             )
-        pred_var = pred_states.var(dim=0, correction=1)   # (T, n_species)
-        true_var = true_states.var(dim=0, correction=1)   # (T, n_species)
+        pred_var = pred_states.var(dim=0, correction=1)  # (T, n_species)
+        true_var = true_states.var(dim=0, correction=1)  # (T, n_species)
         true_mean = true_states.mean(dim=0)
         scale = true_mean.abs().mean().clamp(min=1.0) ** 2
 
         diff = pred_var - true_var
         if mask is not None:
             diff = diff * mask.float()
-        return (diff ** 2).mean() / scale
+        return (diff**2).mean() / scale
 
 
 class CombinedTrajectoryLoss(TrajectoryLoss):
@@ -136,14 +138,14 @@ class CombinedTrajectoryLoss(TrajectoryLoss):
         var_weight: float = 0.5,
     ) -> None:
         """Args:
-            losses: Explicit list of (loss_fn, weight) pairs. If None, uses default
-                MeanMatchingLoss + VarianceMatchingLoss pair.
-            var_weight: Weight for VarianceMatchingLoss in the default configuration.
+        losses: Explicit list of (loss_fn, weight) pairs. If None, uses default
+            MeanMatchingLoss + VarianceMatchingLoss pair.
+        var_weight: Weight for VarianceMatchingLoss in the default configuration.
         """
         if losses is not None:
-            self._losses = losses
+            self._losses: list[tuple[TrajectoryLoss, float]] = losses
         else:
-            self._losses: list[tuple[TrajectoryLoss, float]] = [
+            self._losses = [
                 (MeanMatchingLoss(), 1.0),
                 (VarianceMatchingLoss(), var_weight),
             ]

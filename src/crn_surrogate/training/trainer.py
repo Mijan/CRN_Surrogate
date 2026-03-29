@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,9 +10,9 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from crn_surrogate.configs.model_config import ModelConfig
-from crn_surrogate.configs.training_config import TrainingConfig, SchedulerType
+from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
 from crn_surrogate.data.crn import CRNDefinition
-from crn_surrogate.data.dataset import CRNTrajectoryDataset, CRNCollator
+from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
 from crn_surrogate.data.propensities import PropensityType
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
@@ -51,11 +52,11 @@ class Trainer:
         loss_fn: TrajectoryLoss | None = None,
     ) -> None:
         """Args:
-            encoder: The bipartite GNN encoder.
-            sde: The neural SDE.
-            model_config: Model hyperparameters.
-            train_config: Training hyperparameters.
-            loss_fn: Loss function to use. Defaults to CombinedTrajectoryLoss.
+        encoder: The bipartite GNN encoder.
+        sde: The neural SDE.
+        model_config: Model hyperparameters.
+        train_config: Training hyperparameters.
+        loss_fn: Loss function to use. Defaults to CombinedTrajectoryLoss.
         """
         self._encoder = encoder
         self._sde = sde
@@ -156,10 +157,12 @@ class Trainer:
 
         k = self._train_config.n_sde_samples
         pred_samples = [
-            self._solver.solve(self._sde, init_state, ctx, times, self._train_config.dt).states
+            self._solver.solve(
+                self._sde, init_state, ctx, times, self._train_config.dt
+            ).states
             for _ in range(k)
         ]
-        pred_states = torch.stack(pred_samples, dim=0)   # (K, T, n_species)
+        pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species)
 
         species_mask = batch["species_mask"][idx, :n_species]
         return self._loss_fn.compute(pred_states, true_trajs, mask=species_mask)
@@ -201,7 +204,9 @@ class Trainer:
                 n_batches += 1
         return total_loss / max(n_batches, 1)
 
-    def _build_scheduler(self) -> object:
+    def _build_scheduler(
+        self,
+    ) -> torch.optim.lr_scheduler.LRScheduler | torch.optim.lr_scheduler.ReduceLROnPlateau:
         """Instantiate the LR scheduler from TrainingConfig."""
         if self._train_config.scheduler_type == SchedulerType.COSINE:
             return torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -217,9 +222,7 @@ class Trainer:
 
     def _step_scheduler(self, val_loss: float | None) -> None:
         """Step the LR scheduler, supplying val_loss for ReduceLROnPlateau."""
-        if isinstance(
-            self._scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau
-        ):
+        if isinstance(self._scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             if val_loss is not None:
                 self._scheduler.step(val_loss)
         else:

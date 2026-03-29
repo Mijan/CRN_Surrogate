@@ -1,11 +1,14 @@
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from enum import Enum
+
 import torch
 
 
 class PropensityType(Enum):
     """Categorical propensity function type."""
+
     MASS_ACTION = 0
     HILL = 1
 
@@ -35,7 +38,7 @@ class MassActionPropensity(PropensityFunction):
 
     def __init__(self, reactant_stoich: torch.Tensor) -> None:
         """Args:
-            reactant_stoich: (n_species,) reactant stoichiometry for this reaction.
+        reactant_stoich: (n_species,) reactant stoichiometry for this reaction.
         """
         self._reactant_stoich = reactant_stoich
 

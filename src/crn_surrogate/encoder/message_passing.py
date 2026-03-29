@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 import torch
 import torch.nn as nn
+
 from crn_surrogate.data.crn import BipartiteEdges
 
 
@@ -15,7 +17,7 @@ class MessagePassingLayer(nn.Module):
 
     def __init__(self, d_model: int) -> None:
         """Args:
-            d_model: Hidden dimension for species and reaction nodes.
+        d_model: Hidden dimension for species and reaction nodes.
         """
         super().__init__()
         self._d_model = d_model
