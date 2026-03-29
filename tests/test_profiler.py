@@ -161,7 +161,7 @@ def test_profile_logger_epoch_csv_total_equals_sum_of_batches(tmp_path):
     expected_total = sum(timer.records["forward"])
 
     with open(tmp_path / "profiler_epochs.csv") as f:
-        rows = {row[1]: row for row in csv.DictReader(f)}
+        rows = {row["phase"]: row for row in csv.DictReader(f)}
 
     actual_total = float(rows["forward"]["total_s"])
     assert actual_total == pytest.approx(expected_total, rel=1e-4)
