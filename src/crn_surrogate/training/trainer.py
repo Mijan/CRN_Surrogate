@@ -81,6 +81,7 @@ class Trainer:
         self._wandb: WandbLogger | None = None
         if train_config.use_wandb:
             import dataclasses
+
             self._wandb = WandbLogger(
                 config={
                     **dataclasses.asdict(train_config),
@@ -241,7 +242,10 @@ class Trainer:
 
     def _build_scheduler(
         self,
-    ) -> torch.optim.lr_scheduler.LRScheduler | torch.optim.lr_scheduler.ReduceLROnPlateau:
+    ) -> (
+        torch.optim.lr_scheduler.LRScheduler
+        | torch.optim.lr_scheduler.ReduceLROnPlateau
+    ):
         """Instantiate the LR scheduler from TrainingConfig."""
         if self._train_config.scheduler_type == SchedulerType.COSINE:
             return torch.optim.lr_scheduler.CosineAnnealingLR(

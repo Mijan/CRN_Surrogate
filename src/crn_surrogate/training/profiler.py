@@ -1,10 +1,14 @@
 """profiler.py - Lightweight training profiler and W&B logger for CUDA workloads."""
+
+from __future__ import annotations
+
 import csv
 import os
 import time
-import torch
-import numpy as np
 from collections import defaultdict
+
+import numpy as np
+import torch
 
 
 class PhaseTimer:
@@ -13,11 +17,11 @@ class PhaseTimer:
     def __init__(self, device=None):
         self.device = device
         self.records = defaultdict(list)  # phase -> list of durations
-        self.batch_records = []           # list of per-batch dicts
+        self.batch_records = []  # list of per-batch dicts
         self._current_batch = {}
 
     def _sync(self):
-        if self.device is not None and self.device.type == 'cuda':
+        if self.device is not None and self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
 
     def start_batch(self, **metadata):
@@ -31,25 +35,31 @@ class PhaseTimer:
     def end_batch(self):
         """Finalise the current batch record, appending GPU memory stats if available."""
         if torch.cuda.is_available():
-            self._current_batch['gpu_mem_MB'] = torch.cuda.memory_allocated() / 1e6
-            self._current_batch['gpu_peak_MB'] = torch.cuda.max_memory_allocated() / 1e6
+            self._current_batch["gpu_mem_MB"] = torch.cuda.memory_allocated() / 1e6
+            self._current_batch["gpu_peak_MB"] = torch.cuda.max_memory_allocated() / 1e6
         self.batch_records.append(self._current_batch)
         self._current_batch = {}
 
     def summary(self):
         """Print a summary table of per-phase timing statistics."""
-        print(f"\n{'Phase':<20s} {'mean':>8s} {'std':>8s} {'min':>8s} {'max':>8s} {'total':>8s} {'n':>5s}")
+        print(
+            f"\n{'Phase':<20s} {'mean':>8s} {'std':>8s} {'min':>8s} {'max':>8s} {'total':>8s} {'n':>5s}"
+        )
         print("-" * 65)
         total_all = 0
         for phase, times in self.records.items():
             arr = np.array(times)
             total_all += arr.sum()
-            print(f"  {phase:<18s} {arr.mean():8.4f} {arr.std():8.4f} "
-                  f"{arr.min():8.4f} {arr.max():8.4f} {arr.sum():8.2f} {len(arr):5d}")
+            print(
+                f"  {phase:<18s} {arr.mean():8.4f} {arr.std():8.4f} "
+                f"{arr.min():8.4f} {arr.max():8.4f} {arr.sum():8.2f} {len(arr):5d}"
+            )
         print("-" * 65)
         print(f"  {'TOTAL':<18s} {'':>8s} {'':>8s} {'':>8s} {'':>8s} {total_all:8.2f}")
         if torch.cuda.is_available():
-            print(f"\n  GPU peak memory: {torch.cuda.max_memory_allocated() / 1e6:.0f} MB")
+            print(
+                f"\n  GPU peak memory: {torch.cuda.max_memory_allocated() / 1e6:.0f} MB"
+            )
 
 
 class ProfileLogger:
@@ -63,19 +73,28 @@ class ProfileLogger:
     - ``profiler_epochs.csv``   — one row per phase per epoch (mean/std/min/max/total)
     """
 
-    _EPOCH_FIELDS = ['epoch', 'phase', 'mean_s', 'std_s', 'min_s', 'max_s', 'total_s', 'n']
+    _EPOCH_FIELDS = [
+        "epoch",
+        "phase",
+        "mean_s",
+        "std_s",
+        "min_s",
+        "max_s",
+        "total_s",
+        "n",
+    ]
 
     def __init__(self, log_dir: str) -> None:
         os.makedirs(log_dir, exist_ok=True)
-        self._batch_path = os.path.join(log_dir, 'profiler_batches.csv')
-        self._epoch_path = os.path.join(log_dir, 'profiler_epochs.csv')
+        self._batch_path = os.path.join(log_dir, "profiler_batches.csv")
+        self._epoch_path = os.path.join(log_dir, "profiler_epochs.csv")
         self._batch_fields: list | None = None  # determined from first record
         self._write_header(self._epoch_path, self._EPOCH_FIELDS)
 
     @staticmethod
     def _write_header(path: str, fields: list) -> None:
         if not os.path.exists(path) or os.path.getsize(path) == 0:
-            with open(path, 'w', newline='') as f:
+            with open(path, "w", newline="") as f:
                 csv.writer(f).writerow(fields)
 
     def log_epoch(self, epoch: int, timer: "PhaseTimer") -> None:
@@ -83,35 +102,46 @@ class ProfileLogger:
         if timer.batch_records:
             if self._batch_fields is None:
                 # Infer column order from the first record
-                sample = {'epoch': epoch, **timer.batch_records[0]}
+                sample = {"epoch": epoch, **timer.batch_records[0]}
                 self._batch_fields = list(sample.keys())
                 self._write_header(self._batch_path, self._batch_fields)
 
-            with open(self._batch_path, 'a', newline='') as f:
+            with open(self._batch_path, "a", newline="") as f:
                 writer = csv.DictWriter(
-                    f, fieldnames=self._batch_fields,
-                    extrasaction='ignore', restval='',
+                    f,
+                    fieldnames=self._batch_fields,
+                    extrasaction="ignore",
+                    restval="",
                 )
                 for rec in timer.batch_records:
-                    writer.writerow({'epoch': epoch, **rec})
+                    writer.writerow({"epoch": epoch, **rec})
 
-        with open(self._epoch_path, 'a', newline='') as f:
+        with open(self._epoch_path, "a", newline="") as f:
             writer = csv.writer(f)
             for phase, times in timer.records.items():
                 arr = np.array(times)
-                writer.writerow([
-                    epoch, phase,
-                    f'{arr.mean():.6f}', f'{arr.std():.6f}',
-                    f'{arr.min():.6f}',  f'{arr.max():.6f}',
-                    f'{arr.sum():.6f}',  len(arr),
-                ])
+                writer.writerow(
+                    [
+                        epoch,
+                        phase,
+                        f"{arr.mean():.6f}",
+                        f"{arr.std():.6f}",
+                        f"{arr.min():.6f}",
+                        f"{arr.max():.6f}",
+                        f"{arr.sum():.6f}",
+                        len(arr),
+                    ]
+                )
 
 
 class WandbLogger:
     """Thin wandb wrapper for epoch metrics and per-phase timings."""
 
-    def __init__(self, config: dict, project: str = "my-project", run_name: str = None):
+    def __init__(
+        self, config: dict, project: str = "my-project", run_name: str | None = None
+    ):
         import wandb
+
         self._wandb = wandb
         wandb.init(project=project, name=run_name, config=config)
 
