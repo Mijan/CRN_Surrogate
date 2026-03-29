@@ -117,10 +117,10 @@ class ProfileLogger:
                     writer.writerow({"epoch": epoch, **rec})
 
         with open(self._epoch_path, "a", newline="") as f:
-            writer = csv.writer(f)
+            epoch_writer = csv.writer(f)
             for phase, times in timer.records.items():
                 arr = np.array(times)
-                writer.writerow(
+                epoch_writer.writerow(
                     [
                         epoch,
                         phase,
