@@ -1,0 +1,71 @@
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from crn_surrogate.data.crn import CRNDefinition
+
+
+@dataclass(frozen=True)
+class EncoderConfig:
+    """Configuration for the bipartite GNN encoder."""
+
+    d_model: int = 64
+    n_layers: int = 3               # 3 rounds of message passing is sufficient for small CRNs
+    n_propensity_types: int = 8     # embedding table size
+    max_propensity_params: int = 4
+    dropout: float = 0.0
+
+    def __repr__(self) -> str:
+        return (
+            f"EncoderConfig(d_model={self.d_model}, n_layers={self.n_layers}, "
+            f"n_propensity_types={self.n_propensity_types}, "
+            f"max_propensity_params={self.max_propensity_params})"
+        )
+
+
+@dataclass(frozen=True)
+class SDEConfig:
+    """Configuration for the neural SDE.
+
+    Use SDEConfig.from_crn(crn) to automatically set n_noise_channels = n_reactions,
+    which matches the Chemical Langevin Equation structure (one Wiener process per reaction).
+    """
+
+    d_model: int = 64
+    d_hidden: int = 128
+    n_noise_channels: int = 16      # override with from_crn() for CLE-correct noise dim
+    clip_state: bool = True         # clamp X >= 0 after each Euler-Maruyama step
+
+    @classmethod
+    def from_crn(cls, crn: "CRNDefinition", **kwargs: object) -> "SDEConfig":
+        """Create SDEConfig with n_noise_channels = crn.n_reactions.
+
+        This matches the Chemical Langevin Equation where each reaction drives
+        one independent Wiener process.
+
+        Args:
+            crn: CRN definition whose n_reactions sets n_noise_channels.
+            **kwargs: Additional fields to override (d_model, d_hidden, etc.).
+
+        Returns:
+            SDEConfig with n_noise_channels set to crn.n_reactions.
+        """
+        return cls(n_noise_channels=crn.n_reactions, **kwargs)
+
+    def __repr__(self) -> str:
+        return (
+            f"SDEConfig(d_model={self.d_model}, d_hidden={self.d_hidden}, "
+            f"n_noise_channels={self.n_noise_channels}, clip_state={self.clip_state})"
+        )
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """Top-level model configuration."""
+
+    encoder: EncoderConfig = EncoderConfig()
+    sde: SDEConfig = SDEConfig()
+
+    def __repr__(self) -> str:
+        return f"ModelConfig(encoder={self.encoder!r}, sde={self.sde!r})"
