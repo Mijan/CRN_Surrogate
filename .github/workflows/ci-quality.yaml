@@ -1,0 +1,64 @@
+# .github/workflows/ci-quality.yml
+name: CI Quality
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint-and-type:
+    name: Lint & Type
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install tox
+        run: python -m pip install --upgrade pip tox
+
+      - name: Formatting check
+        run: tox -e format_check
+
+      - name: Lint
+        run: tox -e lint
+
+      - name: Type check
+        run: tox -e type
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Install tox
+        run: python -m pip install --upgrade pip tox
+
+      - name: Run tests
+        run: tox -e py312
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: test-results

@@ -1,0 +1,17 @@
+# Include core metadata
+include README.md
+include requirements.txt
+include pyproject.toml
+
+global-exclude *.pyc __pycache__ *.pyo *.pyd
+prune .github
+exclude tox.ini
+exclude requirements_github.txt
+exclude .gitignore
+prune */__pycache__
+prune */*.egg-info
+prune build
+prune dist
+prune tests
+prune examples
+prune example_data
