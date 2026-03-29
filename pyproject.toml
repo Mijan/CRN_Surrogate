@@ -3,12 +3,12 @@ requires = ["setuptools>=69", "setuptools_scm[toml]>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "package-name"                 # TODO: replace
-description = "Short description"     # TODO: replace
+name = "crn-surrogate"
+description = "Neural surrogate simulator for Chemical Reaction Networks via bipartite GNN + Neural SDE"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
-authors = [{ name = "Your Name" }]    # TODO: replace
+authors = [{ name = "Jan Mikelson" }]
 dynamic = ["version", "dependencies", "optional-dependencies"]
 
 [tool.setuptools]
@@ -32,14 +32,14 @@ testpaths = ["tests"]
 addopts = "-vv"
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 ignore_missing_imports = true
 warn_unused_ignores = true
 no_implicit_optional = true
 
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
