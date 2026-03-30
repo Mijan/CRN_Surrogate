@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import random
@@ -16,6 +17,7 @@ from crn_surrogate.data.generation.configs import GenerationConfig
 from crn_surrogate.data.generation.curation import ViabilityFilter
 from crn_surrogate.data.generation.motif_registry import get_factory
 from crn_surrogate.data.generation.motif_type import MotifType
+from crn_surrogate.data.generation.motifs.base import MotifFactory
 from crn_surrogate.data.generation.parameter_sampling import ParameterSampler
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
@@ -88,7 +90,10 @@ class DataGenerationPipeline:
 
             for params in param_list:
                 crn = factory.create(params)
-                initial_state = self._get_initial_state(factory, params)
+                initial_state_dict = self._sampler.sample_initial_states(
+                    factory, n_samples=1
+                )[0]
+                initial_state = self._initial_state_tensor(factory, initial_state_dict)
 
                 trajs = self._simulate_batch(
                     crn,
@@ -108,7 +113,7 @@ class DataGenerationPipeline:
                         times=time_grid,
                         motif_label=label,
                         cluster_id=-1,
-                        params=params,
+                        params=dataclasses.asdict(params),
                     )
                     all_items.append(item)
                     stats["n_passed"] += 1
@@ -195,26 +200,21 @@ class DataGenerationPipeline:
             trajs.append(traj)
         return torch.stack(trajs, dim=0)  # (M, T, n_species)
 
-    def _get_initial_state(
+    def _initial_state_tensor(
         self,
-        factory: object,
-        params: dict[str, float],
+        factory: MotifFactory,
+        initial_state: dict[str, int],
     ) -> torch.Tensor:
-        """Build the initial state tensor from the sampled parameter dict.
-
-        Species initial populations are stored in params under their species name.
+        """Build the initial state tensor from a sampled initial state dict.
 
         Args:
             factory: MotifFactory providing ordered species names.
-            params: Parameter dict containing species-name keys for initial counts.
+            initial_state: Dict mapping species name to initial molecule count.
 
         Returns:
             (n_species,) float32 tensor of initial molecule counts.
         """
-        from crn_surrogate.data.generation.motifs.base import MotifFactory
-
-        assert isinstance(factory, MotifFactory)
-        values = [params.get(name, 0.0) for name in factory.species_names()]
+        values = [float(initial_state[name]) for name in factory.species_names]
         return torch.tensor(values, dtype=torch.float32)
 
     def _balance(self, items: list[TrajectoryItem]) -> list[TrajectoryItem]:

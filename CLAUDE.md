@@ -45,10 +45,18 @@ the replacement count with the user before committing.
 - All class members must be **private** (`_` prefix) or **protected** (`_`
   prefix) by default. Only expose through `@property` getters. Provide
   setters only when mutation is explicitly part of the design.
+- Use `@property` (not methods) for structural attributes that describe what
+  an object IS (e.g., `n_species`, `motif_type`, `params_type`). The `()`
+  on a method call implies an action or non-trivial computation; a property
+  signals an intrinsic characteristic.
 - Use `@dataclass(frozen=True)` for all value objects and configuration.
   Mutable dataclasses need strong justification.
 - Use **abstract base classes** (`ABC` + `@abstractmethod`) to define
   interfaces. Concrete implementations inherit from these.
+- Use `Generic[T]` on ABCs when subclasses are parameterized by a type
+  (e.g., a factory generic over its params dataclass). Expose the concrete
+  type via a `@property` returning `type[T]` so that callers and tools can
+  construct instances without knowing the concrete subclass.
 - Use **polymorphism and inheritance** meaningfully. If two classes share
   behavior that varies in a specific dimension, define a base class with the
   shared logic and an abstract method for the varying part.
@@ -171,6 +179,39 @@ passed separately at every call site.
   parameters are accessible via a `.params` property for serialization and
   debugging.
 
+### String-keyed dicts are not a typed interface
+
+When a function or factory accepts configuration through `dict[str, float]`
+or `dict[str, Any]`, the caller gets no type checking, no IDE
+autocompletion, and no safe refactoring. A misspelled key (`k_prodd` instead
+of `k_prod`) silently produces a runtime KeyError, not a type error.
+
+- If a function takes more than two related parameters that could be
+  misspelled, group them into a frozen dataclass with named, typed fields.
+- If a factory constructs objects from a parameter set, the parameter set
+  must be a typed dataclass, not a dict. The factory should be generic over
+  the params type (`MotifFactory[P]`).
+- The single place where string-keyed dicts are converted to typed params is
+  a dedicated `from_dict()` or `params_from_dict()` method. No other code
+  should index into a params dict by string key.
+- If two modules need to share parameter values (e.g., a shared degradation
+  rate), Python variable binding is sufficient when parameters are typed
+  dataclass fields. No special "sharing" machinery is needed.
+
+### Structural constants and identities belong inside the class
+
+If a constant (`_N_SPECIES = 2`, `_DEFAULT_NAMES = ("A", "B")`) is
+intrinsic to a specific class, it must be a `ClassVar` on that class, not a
+module-level variable. Module-level constants are acceptable only for values
+that are genuinely module-wide (e.g., a logger instance, a global registry).
+
+- When multiple classes in the same module each have their own structural
+  constants, module-level placement creates ambiguity about which constant
+  belongs to which class.
+- Constants that callers might want to customize (like default species names)
+  should be exposed through the constructor with the `ClassVar` as the
+  default, not frozen at module scope.
+
 ### Positional indexing into flat tensors is not an API
 
 If a tensor has semantic slots (e.g., params[0] = rate_constant, params[1] =
@@ -249,6 +290,11 @@ files agree on the value today.
   dictated by the code is not a hyperparameter; it is a derived property.
 - If adding a new channel to a feature vector requires changing more than two
   locations (the enum + the builder function), the abstraction is leaking.
+- When a field has associated metadata (valid range, unit, description),
+  co-locate the metadata with the field definition. For dataclass fields, use
+  `dataclasses.field(metadata={...})`. A field name that appears in two
+  places (once in the dataclass, once in a separate dict of metadata keyed by
+  string) is a duplication bug waiting to happen.
 
 ### Network architecture details must be configurable, not hardcoded
 
@@ -267,6 +313,24 @@ They must live in config dataclasses, not in the constructor body.
   every hidden layer of a conditioned network, not only at the output.
   Output-only conditioning limits the network to learning context-independent
   intermediate features, which is unnecessarily restrictive.
+
+### Separate defining parameters from runtime inputs
+
+A domain object's parameters (the values that define what it IS) must be
+distinguished from the inputs it receives at execution time.
+
+- A CRN is defined by its reactions (stoichiometry + rate constants). The
+  initial molecular state is a simulation input, not part of the CRN
+  definition. They should not live in the same config or params object.
+- A neural network is defined by its architecture and weights. The input
+  tensor is a runtime argument to `forward()`, not a constructor parameter.
+- When a factory constructs a domain object, its params dataclass should
+  contain only defining parameters. Runtime inputs (initial states, time
+  spans, solver settings) are passed separately at the call site.
+- This separation prevents conflation in sampling, serialization, and
+  composition. If initial states are mixed into CRN params, composing two
+  CRNs requires merging their initial states, which is a simulation concern
+  leaking into the structural layer.
 
 ### Train sequential models on one-step objectives first
 

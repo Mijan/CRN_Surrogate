@@ -2,19 +2,38 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import ClassVar
+
 import torch
 
 from crn_surrogate.crn.crn import CRN
 from crn_surrogate.crn.propensities import constant_rate, mass_action
 from crn_surrogate.crn.reaction import Reaction
 from crn_surrogate.data.generation.motif_type import MotifType
-from crn_surrogate.data.generation.motifs.base import MotifFactory, MotifParameterRanges
+from crn_surrogate.data.generation.motifs.base import (
+    InitialStateRange,
+    MotifFactory,
+    param_field,
+)
 
-_SPECIES: tuple[str, ...] = ("A",)
-_N_REACTIONS: int = 3
+
+@dataclass(frozen=True)
+class AutoCatalysisParams:
+    """Parameters for the auto-catalysis motif.
+
+    Attributes:
+        k_basal: Basal (constitutive) production rate.
+        k_cat: Autocatalytic amplification rate.
+        k_deg: First-order degradation rate. Must exceed k_cat for bounded dynamics.
+    """
+
+    k_basal: float = param_field(0.1, 10.0)
+    k_cat: float = param_field(0.001, 0.1)
+    k_deg: float = param_field(0.01, 0.5)
 
 
-class AutoCatalysisFactory(MotifFactory):
+class AutoCatalysisFactory(MotifFactory[AutoCatalysisParams]):
     """Factory for the auto-catalysis motif.
 
     Topology:
@@ -25,73 +44,82 @@ class AutoCatalysisFactory(MotifFactory):
     Constraint: k_deg > k_cat (required for bounded steady state).
     """
 
+    _DEFAULT_SPECIES: ClassVar[tuple[str, ...]] = ("A",)
+    _N_SPECIES: ClassVar[int] = 1
+    _N_REACTIONS: ClassVar[int] = 3
+
+    def _default_species_names(self) -> tuple[str, ...]:
+        return self._DEFAULT_SPECIES
+
+    @property
+    def n_species(self) -> int:
+        return self._N_SPECIES
+
+    @property
+    def n_reactions(self) -> int:
+        return self._N_REACTIONS
+
+    @property
     def motif_type(self) -> MotifType:
-        """Return AUTO_CATALYSIS motif type."""
         return MotifType.AUTO_CATALYSIS
 
-    def species_names(self) -> tuple[str, ...]:
-        """Return species names."""
-        return _SPECIES
+    @property
+    def params_type(self) -> type[AutoCatalysisParams]:
+        return AutoCatalysisParams
 
-    def n_reactions(self) -> int:
-        """Return number of reactions."""
-        return _N_REACTIONS
-
-    def parameter_ranges(self) -> MotifParameterRanges:
-        """Return parameter ranges for the auto-catalysis motif.
+    def initial_state_ranges(self) -> dict[str, InitialStateRange]:
+        """Return initial state ranges for the auto-catalysis motif.
 
         Returns:
-            MotifParameterRanges with rate and initial-state bounds.
+            Dict mapping species name to InitialStateRange.
         """
-        return MotifParameterRanges(
-            rate_ranges={
-                "k_basal": (0.1, 10.0),
-                "k_cat": (0.001, 0.1),
-                "k_deg": (0.01, 0.5),
-            },
-            hill_coefficient_ranges={},
-            initial_state_ranges={"A": (1, 30)},
-        )
+        return {
+            self._species_names[0]: InitialStateRange(1, 30),
+        }
 
-    def check_constraints(self, params: dict[str, float]) -> bool:
+    def validate_params(self, params: AutoCatalysisParams) -> None:
         """Enforce k_deg > k_cat for bounded steady state.
 
         Args:
-            params: Sampled parameter dict.
+            params: AutoCatalysisParams to validate.
 
-        Returns:
-            True only if k_deg strictly exceeds k_cat.
+        Raises:
+            TypeError: If params is not AutoCatalysisParams.
+            ValueError: If k_cat >= k_deg.
         """
-        return params["k_deg"] > params["k_cat"]
+        super().validate_params(params)
+        if params.k_cat >= params.k_deg:
+            raise ValueError(
+                f"Auto-catalysis requires k_deg > k_cat for bounded dynamics, "
+                f"got k_cat={params.k_cat}, k_deg={params.k_deg}"
+            )
 
-    def create(self, params: dict[str, float]) -> CRN:
+    def create(self, params: AutoCatalysisParams) -> CRN:
         """Create an auto-catalysis CRN from the given parameters.
 
         Args:
-            params: Must contain "k_basal", "k_cat", and "k_deg".
+            params: AutoCatalysisParams with k_basal, k_cat, and k_deg.
 
         Returns:
             CRN with basal production, autocatalytic amplification, and degradation.
         """
-        k_basal = params["k_basal"]
-        k_cat = params["k_cat"]
-        k_deg = params["k_deg"]
-
+        self.validate_params(params)
+        a_name = self._species_names[0]
         reactions = [
             Reaction(
                 stoichiometry=torch.tensor([1.0]),
-                propensity=constant_rate(k_basal),
-                name="basal_production",
+                propensity=constant_rate(params.k_basal),
+                name=f"{a_name}_basal_production",
             ),
             Reaction(
                 stoichiometry=torch.tensor([1.0]),
-                propensity=mass_action(k_cat, torch.tensor([1.0])),
-                name="autocatalysis",
+                propensity=mass_action(params.k_cat, torch.tensor([1.0])),
+                name=f"{a_name}_autocatalysis",
             ),
             Reaction(
                 stoichiometry=torch.tensor([-1.0]),
-                propensity=mass_action(k_deg, torch.tensor([1.0])),
-                name="degradation",
+                propensity=mass_action(params.k_deg, torch.tensor([1.0])),
+                name=f"{a_name}_degradation",
             ),
         ]
-        return CRN(reactions=reactions, species_names=list(_SPECIES))
+        return CRN(reactions=reactions, species_names=list(self._species_names))
