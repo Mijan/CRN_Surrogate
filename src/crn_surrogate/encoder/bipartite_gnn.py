@@ -9,7 +9,10 @@ import torch.nn as nn
 from crn_surrogate.configs.model_config import EncoderConfig
 from crn_surrogate.encoder.embeddings import ReactionEmbedding, SpeciesEmbedding
 from crn_surrogate.encoder.graph_utils import BipartiteEdges
-from crn_surrogate.encoder.message_passing import MessagePassingLayer
+from crn_surrogate.encoder.message_passing import (
+    AttentiveMessagePassingLayer,
+    SumMessagePassingLayer,
+)
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 
 
@@ -47,8 +50,13 @@ class BipartiteGNNEncoder(nn.Module):
         self._config = config
         self._species_embed = SpeciesEmbedding(config)
         self._reaction_embed = ReactionEmbedding(config)
+        layer_cls = (
+            AttentiveMessagePassingLayer
+            if config.use_attention
+            else SumMessagePassingLayer
+        )
         self._layers = nn.ModuleList(
-            [MessagePassingLayer(config.d_model) for _ in range(config.n_layers)]
+            [layer_cls(config.d_model) for _ in range(config.n_layers)]
         )
 
     def forward(

@@ -234,6 +234,22 @@ annotated categories.
   alone, enrich the computable features (e.g., add edge features, add
   propensity sensitivity estimates) before resorting to annotations.
 
+### Structural constants must have a single source of truth
+
+When a dimension, count, or schema is determined by one module and consumed
+by another, define it in exactly one place and have all consumers derive
+from that definition. Never duplicate a constant across files, even if both
+files agree on the value today.
+
+- If a feature vector has N channels, define an Enum listing the channels in
+  the module that constructs the vector. Export `N = len(TheEnum)`. Consumers
+  import N rather than hardcoding it.
+- Never store structural constants (dimensions determined by data format) in
+  config. Config is for hyperparameters (values the user chooses). A dimension
+  dictated by the code is not a hyperparameter; it is a derived property.
+- If adding a new channel to a feature vector requires changing more than two
+  locations (the enum + the builder function), the abstraction is leaking.
+
 ---
 
 ## Documentation

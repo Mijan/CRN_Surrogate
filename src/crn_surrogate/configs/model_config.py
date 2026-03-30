@@ -21,6 +21,8 @@ class EncoderConfig:
             ReactionEmbedding. Defaults to d_model // 4; the remainder
             (d_model - type_embed_dim) goes to the parameter projection.
         dropout: Dropout probability (0.0 = disabled).
+        use_attention: If True, use AttentiveMessagePassingLayer instead of
+            SumMessagePassingLayer. Disabled by default for initial experiments.
     """
 
     d_model: int = 64
@@ -30,6 +32,7 @@ class EncoderConfig:
     max_species: int = 32
     type_embed_dim: int = 0  # 0 = auto: set to d_model // 4 in __post_init__
     dropout: float = 0.0
+    use_attention: bool = False
 
     def __post_init__(self) -> None:
         if self.type_embed_dim == 0:
