@@ -213,14 +213,24 @@ class TrajectoryComparator:
             The populated figure.
         """
         fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-        kw = {
-            "species_index": species_index,
-            "sde_label": sde_label,
-            "sde_color": sde_color,
-        }
-        self.plot_mean_std(**kw, ax=axes[0])
-        self.plot_variance(**kw, ax=axes[1])
-        self.plot_sample_paths(**kw, ax=axes[2])
+        self.plot_mean_std(
+            species_index=species_index,
+            sde_label=sde_label,
+            sde_color=sde_color,
+            ax=axes[0],
+        )
+        self.plot_variance(
+            species_index=species_index,
+            sde_label=sde_label,
+            sde_color=sde_color,
+            ax=axes[1],
+        )
+        self.plot_sample_paths(
+            species_index=species_index,
+            sde_label=sde_label,
+            sde_color=sde_color,
+            ax=axes[2],
+        )
         axes[0].set_title("Mean ± Std")
         axes[1].set_title("Variance")
         axes[2].set_title("Sample Paths")
