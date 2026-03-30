@@ -64,6 +64,9 @@ class CRNTensorRepr:
     dependency_matrix: torch.Tensor
     propensity_type_ids: torch.Tensor
     propensity_params: torch.Tensor
+    species_names: tuple[str, ...] = ()
+    reaction_names: tuple[str, ...] = ()
+    name: str = ""
 
     @property
     def n_species(self) -> int:
@@ -147,6 +150,9 @@ def crn_to_tensor_repr(crn: "CRN", max_params: int = 4) -> CRNTensorRepr:
         dependency_matrix=torch.stack(dep_rows, dim=0),
         propensity_type_ids=torch.tensor(type_id_rows, dtype=torch.long),
         propensity_params=torch.stack(param_rows, dim=0),
+        species_names=crn.species_names,
+        reaction_names=tuple(rxn.name for rxn in crn.reactions),
+        name=crn.name if hasattr(crn, 'name') else ""
     )
 
 
