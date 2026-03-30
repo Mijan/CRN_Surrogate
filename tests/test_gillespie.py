@@ -178,3 +178,24 @@ def test_interpolate_to_grid_handles_trajectory_shorter_than_tmax():
 
     assert result.shape == (100, 1)
     assert (result >= 0).all()
+
+
+# ── max_reactions cap ─────────────────────────────────────────────────────────
+
+
+def test_gillespie_max_reactions_cap_stops_simulation_early():
+    """When max_reactions is set, the trajectory has at most max_reactions + 1 events.
+
+    Uses a high birth rate to ensure many reactions would fire before t_max.
+    """
+    crn = birth_death(k_birth=1000.0, k_death=0.0)
+    ssa = GillespieSSA()
+    traj = ssa.simulate(
+        stoichiometry=crn.stoichiometry_matrix,
+        propensity_fn=crn.evaluate_propensities,
+        initial_state=torch.tensor([0.0]),
+        t_max=1000.0,
+        max_reactions=10,
+    )
+    # +1 for the initial state recorded before any reaction fires
+    assert traj.times.shape[0] <= 11

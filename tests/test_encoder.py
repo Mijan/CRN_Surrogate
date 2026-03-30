@@ -19,6 +19,7 @@ import torch
 from crn_surrogate.configs.model_config import EncoderConfig
 from crn_surrogate.crn.examples import birth_death, lotka_volterra
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
+from crn_surrogate.encoder.embeddings import ReactionEmbedding, SpeciesEmbedding
 from crn_surrogate.encoder.graph_utils import (
     EDGE_FEAT_DIM,
     EdgeFeature,
@@ -255,3 +256,81 @@ def test_encoder_with_attention_gradients_flow():
 
     for name, param in encoder.named_parameters():
         assert param.grad is not None, f"No gradient for parameter: {name}"
+
+
+# ── Catalytic species edge flags ───────────────────────────────────────────────
+
+
+def test_build_bipartite_edges_catalytic_species_has_dependency_not_stoichiometric():
+    """A catalytic enzyme has IS_STOICHIOMETRIC=0, IS_DEPENDENCY=1.
+
+    Uses a minimal 2-species CRN: enzyme (idx 0) catalyses substrate (idx 1)
+    consumption. Net stoichiometry of enzyme = 0, but it is a dependency.
+    """
+    import torch
+
+    stoichiometry = torch.tensor([[0.0, -1.0]])  # enzyme unchanged, substrate consumed
+    dep_matrix = torch.tensor(
+        [[1.0, 1.0]]
+    )  # both enzyme and substrate are dependencies
+
+    edges = build_bipartite_edges(stoichiometry, dep_matrix)
+
+    # Locate the enzyme edge (rxn 0 → species 0)
+    rxn_idx = edges.rxn_to_species_index[0]
+    spe_idx = edges.rxn_to_species_index[1]
+    enzyme_mask = (rxn_idx == 0) & (spe_idx == 0)
+    assert enzyme_mask.any(), "Expected an edge from reaction 0 to species 0 (enzyme)"
+
+    enzyme_feat = edges.rxn_to_species_feat[enzyme_mask]
+    assert enzyme_feat[0, EdgeFeature.IS_STOICHIOMETRIC].item() == pytest.approx(0.0)
+    assert enzyme_feat[0, EdgeFeature.IS_DEPENDENCY].item() == pytest.approx(1.0)
+
+
+# ── SpeciesEmbedding ──────────────────────────────────────────────────────────
+
+
+def test_species_embedding_output_shape():
+    """SpeciesEmbedding returns (n_species, d_model)."""
+    d_model = 16
+    config = EncoderConfig(d_model=d_model)
+    emb = SpeciesEmbedding(config)
+    out = emb(torch.tensor([5.0, 10.0]))
+    assert out.shape == (2, d_model)
+
+
+def test_species_embedding_concentration_sensitivity():
+    """Different initial concentrations must produce different embeddings."""
+    config = EncoderConfig(d_model=16)
+    emb = SpeciesEmbedding(config)
+    out_low = emb(torch.tensor([0.0]))
+    out_high = emb(torch.tensor([100.0]))
+    assert not torch.allclose(out_low, out_high), (
+        "SpeciesEmbedding is insensitive to initial concentration"
+    )
+
+
+# ── ReactionEmbedding ─────────────────────────────────────────────────────────
+
+
+def test_reaction_embedding_output_shape():
+    """ReactionEmbedding returns (n_reactions, d_model)."""
+    d_model = 16
+    config = EncoderConfig(d_model=d_model)
+    emb = ReactionEmbedding(config)
+    crn_repr = crn_to_tensor_repr(birth_death())
+    out = emb(crn_repr.propensity_type_ids, crn_repr.propensity_params)
+    assert out.shape == (2, d_model)
+
+
+def test_reaction_embedding_type_id_sensitivity():
+    """Different propensity type IDs must produce different embeddings."""
+    config = EncoderConfig(d_model=16)
+    emb = ReactionEmbedding(config)
+    params = torch.zeros(1, config.max_propensity_params)
+
+    out_type0 = emb(torch.tensor([0]), params)
+    out_type1 = emb(torch.tensor([1]), params)
+    assert not torch.allclose(out_type0, out_type1), (
+        "ReactionEmbedding produces identical output for different type IDs"
+    )

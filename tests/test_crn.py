@@ -287,3 +287,81 @@ def test_crn_repr_contains_species_and_reaction_counts():
     r = repr(crn)
     assert "n_species=1" in r
     assert "n_reactions=2" in r
+
+
+# ── CRN.dependency_matrix ─────────────────────────────────────────────────────
+
+
+def test_crn_dependency_matrix_shape():
+    """dependency_matrix has shape (n_reactions, n_species)."""
+    crn = birth_death()
+    assert crn.dependency_matrix.shape == (2, 1)
+
+
+def test_crn_dependency_matrix_birth_reaction_has_no_species_dependencies():
+    """birth (constant_rate) depends on no species: dependency row is all zeros."""
+    crn = birth_death()
+    dep = crn.dependency_matrix
+    assert dep[0, 0].item() == 0.0
+
+
+def test_crn_dependency_matrix_death_reaction_depends_on_species_0():
+    """death (mass_action on species 0) has dependency 1.0 for species 0."""
+    crn = birth_death()
+    dep = crn.dependency_matrix
+    assert dep[1, 0].item() == 1.0
+
+
+def test_crn_dependency_matrix_warns_for_propensity_without_species_dependencies():
+    """A raw lambda propensity (no .species_dependencies) triggers a UserWarning."""
+    crn = CRN(reactions=[Reaction(torch.tensor([1]), lambda s, t: torch.tensor(1.0))])
+    with pytest.warns(UserWarning):
+        _ = crn.dependency_matrix
+
+
+# ── CRNTensorRepr properties ──────────────────────────────────────────────────
+
+
+def test_tensor_repr_n_species_and_n_reactions_properties():
+    """CRNTensorRepr.n_species and .n_reactions match the original CRN."""
+    crn = lotka_volterra()
+    repr_ = crn_to_tensor_repr(crn)
+    assert repr_.n_species == 2
+    assert repr_.n_reactions == 3
+
+
+def test_tensor_repr_bipartite_edges_is_lazily_computed_and_cached():
+    """bipartite_edges returns the same object on repeated access (lazy cache)."""
+    repr_ = crn_to_tensor_repr(birth_death())
+    edges1 = repr_.bipartite_edges
+    edges2 = repr_.bipartite_edges
+    assert edges1 is edges2
+
+
+# ── Additional round-trips ────────────────────────────────────────────────────
+
+
+def test_tensor_repr_round_trip_simple_mapk_cascade():
+    """Round-trip preserves propensity values for a 7-species enzymatic cascade."""
+    original = simple_mapk_cascade()
+    state = torch.tensor([10.0, 5.0, 8.0, 2.0, 12.0, 3.0, 1.0])
+
+    reconstructed = tensor_repr_to_crn(crn_to_tensor_repr(original))
+    a_orig = original.evaluate_propensities(state)
+    a_recon = reconstructed.evaluate_propensities(state)
+
+    torch.testing.assert_close(a_orig, a_recon, atol=1e-5, rtol=1e-5)
+
+
+def test_tensor_repr_to_crn_raises_for_unknown_type_id():
+    """tensor_repr_to_crn must raise ValueError for an unrecognised propensity type ID."""
+    repr_ = crn_to_tensor_repr(birth_death())
+    # Overwrite type IDs with an unknown value
+    bad_repr = type(repr_)(
+        stoichiometry=repr_.stoichiometry,
+        dependency_matrix=repr_.dependency_matrix,
+        propensity_type_ids=torch.tensor([99, 99]),
+        propensity_params=repr_.propensity_params,
+    )
+    with pytest.raises(ValueError, match="Unknown propensity type ID"):
+        tensor_repr_to_crn(bad_repr)
