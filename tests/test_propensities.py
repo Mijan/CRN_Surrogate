@@ -133,10 +133,10 @@ def test_constant_rate_ignores_t():
 
 def test_mass_action_params_round_trip():
     """MassActionParams.to_tensor / from_tensor preserve the rate constant."""
-    params = MassActionParams(rate_constant=1.5, reactant_stoichiometry=torch.tensor([1.0]))
+    params = MassActionParams(rate_constant=1.5)
     t = params.to_tensor(max_params=4)
     assert t[0].item() == pytest.approx(1.5)
-    reconstructed = MassActionParams.from_tensor(t, params.reactant_stoichiometry)
+    reconstructed = MassActionParams.from_tensor(t)
     assert reconstructed.rate_constant == pytest.approx(1.5)
 
 

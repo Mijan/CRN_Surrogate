@@ -21,8 +21,8 @@ from crn_surrogate.crn.examples import (
     toggle_switch,
 )
 from crn_surrogate.crn.propensities import mass_action
+from crn_surrogate.encoder.graph_utils import build_bipartite_edges
 from crn_surrogate.encoder.tensor_repr import (
-    build_bipartite_edges,
     crn_to_tensor_repr,
     tensor_repr_to_crn,
 )

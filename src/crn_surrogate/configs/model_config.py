@@ -9,13 +9,31 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class EncoderConfig:
-    """Configuration for the bipartite GNN encoder."""
+    """Configuration for the bipartite GNN encoder.
+
+    Attributes:
+        d_model: Hidden dimension for all node embeddings.
+        n_layers: Number of bipartite message-passing rounds.
+        n_propensity_types: Size of the propensity type embedding table.
+        max_propensity_params: Max number of kinetic parameters per reaction.
+        max_species: Upper bound on species count for identity embeddings.
+        type_embed_dim: Dimension allocated to the propensity type embedding in
+            ReactionEmbedding. Defaults to d_model // 4; the remainder
+            (d_model - type_embed_dim) goes to the parameter projection.
+        dropout: Dropout probability (0.0 = disabled).
+    """
 
     d_model: int = 64
     n_layers: int = 3  # 3 rounds of message passing is sufficient for small CRNs
     n_propensity_types: int = 8  # embedding table size
     max_propensity_params: int = 4
+    max_species: int = 32
+    type_embed_dim: int = 0  # 0 = auto: set to d_model // 4 in __post_init__
     dropout: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.type_embed_dim == 0:
+            object.__setattr__(self, "type_embed_dim", self.d_model // 4)
 
     def __repr__(self) -> str:
         return (

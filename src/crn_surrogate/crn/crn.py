@@ -85,6 +85,15 @@ class CRN:
             )
         return self._stoichiometry_matrix
 
+    @property
+    def reactant_matrix(self) -> torch.Tensor:
+        """(n_reactions, n_species) consumption counts derived from stoichiometry.
+
+        Entry [r, s] is the number of molecules of species s consumed when
+        reaction r fires. Equals max(0, -S[r, s]).
+        """
+        return (-self.stoichiometry_matrix).clamp(min=0)
+
     def evaluate_propensities(
         self, state: torch.Tensor, t: float = 0.0
     ) -> torch.Tensor:

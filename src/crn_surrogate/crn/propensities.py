@@ -21,19 +21,20 @@ from crn_surrogate.crn.reaction import PropensityFn
 class MassActionParams:
     """Named parameters for mass-action kinetics.
 
+    Only the rate constant is stored here. The reactant stoichiometry is a
+    structural property encoded in the CRN's stoichiometry matrix and is
+    not a kinetic parameter.
+
     Attributes:
         rate_constant: Rate constant k.
-        reactant_stoichiometry: (n_species,) consumption counts per species.
     """
 
     rate_constant: float
-    reactant_stoichiometry: torch.Tensor  # (n_species,)
 
     def to_tensor(self, max_params: int = 4) -> torch.Tensor:
         """Serialize to a flat tensor of length max_params.
 
-        Layout: [rate_constant, 0, 0, ...]. The reactant_stoichiometry is
-        encoded separately in the reactant_matrix of the tensor representation.
+        Layout: [rate_constant, 0, 0, ...].
 
         Args:
             max_params: Length of the output tensor.
@@ -46,19 +47,16 @@ class MassActionParams:
         return t
 
     @classmethod
-    def from_tensor(
-        cls, params: torch.Tensor, reactant_stoich: torch.Tensor
-    ) -> MassActionParams:
-        """Reconstruct from flat parameter tensor and reactant stoichiometry.
+    def from_tensor(cls, params: torch.Tensor) -> "MassActionParams":
+        """Reconstruct from flat parameter tensor.
 
         Args:
             params: Flat tensor with rate_constant at index 0.
-            reactant_stoich: (n_species,) reactant stoichiometry.
 
         Returns:
             MassActionParams instance.
         """
-        return cls(rate_constant=params[0].item(), reactant_stoichiometry=reactant_stoich)
+        return cls(rate_constant=params[0].item())
 
 
 @dataclass(frozen=True)
@@ -119,18 +117,31 @@ class HillParams:
 class _MassActionClosure:
     """Callable mass-action propensity: a(X,t) = k * prod_s X_s^{R_s}."""
 
-    def __init__(self, params: MassActionParams) -> None:
+    def __init__(
+        self, params: MassActionParams, reactant_stoichiometry: torch.Tensor
+    ) -> None:
         self._params = params
+        self._reactant_stoichiometry = reactant_stoichiometry
 
     def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
         k = self._params.rate_constant
-        rs = self._params.reactant_stoichiometry.float()
+        rs = self._reactant_stoichiometry.float()
         return k * torch.pow(state.clamp(min=0.0), rs).prod()
 
     @property
     def params(self) -> MassActionParams:
-        """Inspectable parameter dataclass."""
+        """Kinetic parameter dataclass (rate constant only)."""
         return self._params
+
+    @property
+    def reactant_stoichiometry(self) -> torch.Tensor:
+        """(n_species,) consumption counts for this reaction.
+
+        Separate from params because reactant stoichiometry is structural
+        information, not a kinetic parameter. Needed for serialization and
+        propensity evaluation, but not part of the learnable parameter set.
+        """
+        return self._reactant_stoichiometry
 
     def __repr__(self) -> str:
         return f"MassAction(k={self._params.rate_constant})"
@@ -195,10 +206,8 @@ def mass_action(
         Callable (state, t) → scalar propensity.
     """
     return _MassActionClosure(
-        MassActionParams(
-            rate_constant=rate_constant,
-            reactant_stoichiometry=reactant_stoichiometry,
-        )
+        MassActionParams(rate_constant=rate_constant),
+        reactant_stoichiometry=reactant_stoichiometry,
     )
 
 

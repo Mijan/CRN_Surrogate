@@ -4,9 +4,6 @@ This module defines the boundary between the symbolic CRN world and the tensor
 world consumed by the neural network encoder.
 
 Flow: symbolic CRN → CRNTensorRepr → BipartiteGNNEncoder → embeddings.
-
-Also contains BipartiteEdges and build_bipartite_edges, which are derived from
-CRNTensorRepr and used by the message-passing encoder.
 """
 from __future__ import annotations
 
@@ -16,12 +13,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from crn_surrogate.crn.propensities import (
-    HillParams,
-    MassActionParams,
-    _HillClosure,
-    _MassActionClosure,
-)
+from crn_surrogate.crn.propensities import HillParams, MassActionParams
+from crn_surrogate.encoder.graph_utils import BipartiteEdges, build_bipartite_edges
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.crn import CRN
@@ -32,6 +25,15 @@ class PropensityType(Enum):
 
     MASS_ACTION = 0
     HILL = 1
+
+
+# Registry mapping parameter dataclass type → PropensityType integer value.
+# To support a new propensity type, add its Params class here and handle it
+# in tensor_repr_to_crn.
+_PARAMS_TO_TYPE_ID: dict[type, int] = {
+    MassActionParams: PropensityType.MASS_ACTION.value,
+    HillParams: PropensityType.HILL.value,
+}
 
 
 @dataclass(frozen=True)
@@ -62,61 +64,22 @@ class CRNTensorRepr:
         """Number of reactions."""
         return int(self.stoichiometry.shape[0])
 
-
-@dataclass(frozen=True)
-class BipartiteEdges:
-    """Edge indices and features for bipartite message passing.
-
-    Attributes:
-        rxn_to_species_index: (2, E) — row 0: reaction indices, row 1: species indices.
-        rxn_to_species_feat: (E, 2) — [reactant_count, net_change] per edge.
-        species_to_rxn_index: (2, E) — row 0: species indices, row 1: reaction indices.
-        species_to_rxn_feat: (E, 2) — [reactant_count, net_change] per edge.
-    """
-
-    rxn_to_species_index: torch.Tensor
-    rxn_to_species_feat: torch.Tensor
-    species_to_rxn_index: torch.Tensor
-    species_to_rxn_feat: torch.Tensor
-
-
-def build_bipartite_edges(
-    stoichiometry: torch.Tensor,
-    reactant_matrix: torch.Tensor,
-) -> BipartiteEdges:
-    """Extract bipartite edges from stoichiometry and reactant matrices.
-
-    An edge exists between reaction r and species s wherever |S[r,s]| > 0
-    or R[r,s] > 0.
-
-    Args:
-        stoichiometry: (n_reactions, n_species) net change matrix.
-        reactant_matrix: (n_reactions, n_species) consumption matrix.
-
-    Returns:
-        BipartiteEdges with indices and features for both message directions.
-    """
-    mask = (stoichiometry.abs() > 0) | (reactant_matrix > 0)
-    rxn_idx, species_idx = mask.nonzero(as_tuple=True)
-
-    reactant_counts = reactant_matrix[rxn_idx, species_idx].float().unsqueeze(1)
-    net_changes = stoichiometry[rxn_idx, species_idx].float().unsqueeze(1)
-    edge_feat = torch.cat([reactant_counts, net_changes], dim=1)
-
-    return BipartiteEdges(
-        rxn_to_species_index=torch.stack([rxn_idx, species_idx], dim=0),
-        rxn_to_species_feat=edge_feat,
-        species_to_rxn_index=torch.stack([species_idx, rxn_idx], dim=0),
-        species_to_rxn_feat=edge_feat,
-    )
+    @property
+    def bipartite_edges(self) -> BipartiteEdges:
+        """Lazily computed and cached bipartite edges for this CRN's graph structure."""
+        if not hasattr(self, "_cached_edges"):
+            edges = build_bipartite_edges(self.stoichiometry, self.reactant_matrix)
+            object.__setattr__(self, "_cached_edges", edges)
+        return self._cached_edges  # type: ignore[attr-defined]
 
 
 def crn_to_tensor_repr(crn: "CRN", max_params: int = 4) -> CRNTensorRepr:
     """Convert a CRN to its flat tensor representation.
 
-    Only propensities that implement the SerializablePropensity protocol
-    (i.e. _MassActionClosure and _HillClosure) are supported. Custom callables
-    must be wrapped in an inspectable class with a .params property.
+    Only propensities that expose a `.params` property whose type is
+    registered in _PARAMS_TO_TYPE_ID are supported. Custom propensity
+    callables must implement a `.params` property returning a registered
+    Params dataclass.
 
     Args:
         crn: The CRN to convert.
@@ -126,32 +89,40 @@ def crn_to_tensor_repr(crn: "CRN", max_params: int = 4) -> CRNTensorRepr:
         CRNTensorRepr suitable for the BipartiteGNNEncoder.
 
     Raises:
-        ValueError: If any propensity type is not serializable.
+        ValueError: If any propensity type is not serializable or not registered.
     """
-    n_reactions = crn.n_reactions
-    n_species = crn.n_species
+    type_id_rows: list[int] = []
+    param_rows: list[torch.Tensor] = []
+    reactant_rows: list[torch.Tensor] = []
 
     stoichiometry = crn.stoichiometry_matrix  # (n_reactions, n_species)
-    reactant_rows = []
-    type_id_rows = []
-    param_rows = []
 
     for r, rxn in enumerate(crn.reactions):
         prop = rxn.propensity
-        if isinstance(prop, _MassActionClosure):
-            type_id_rows.append(PropensityType.MASS_ACTION.value)
-            param_rows.append(prop.params.to_tensor(max_params))
-            reactant_rows.append(prop.params.reactant_stoichiometry.float())
-        elif isinstance(prop, _HillClosure):
-            type_id_rows.append(PropensityType.HILL.value)
-            param_rows.append(prop.params.to_tensor(max_params))
-            reactant_rows.append(torch.zeros(n_species))
-        else:
+        if not hasattr(prop, "params"):
             raise ValueError(
                 f"Reaction {r} ('{rxn.name}') has a non-serializable propensity "
-                f"of type {type(prop).__name__}. To serialize, wrap it in a class "
-                f"with a .params property implementing to_tensor() / from_tensor()."
+                f"of type {type(prop).__name__}. Wrap it in a callable class "
+                f"with a .params property implementing to_tensor()."
             )
+        params = prop.params
+        param_type = type(params)
+        if param_type not in _PARAMS_TO_TYPE_ID:
+            raise ValueError(
+                f"Reaction {r} ('{rxn.name}') has propensity params of type "
+                f"{param_type.__name__}, which is not registered for "
+                f"serialization. Known types: {list(_PARAMS_TO_TYPE_ID.keys())}"
+            )
+        type_id_rows.append(_PARAMS_TO_TYPE_ID[param_type])
+        param_rows.append(params.to_tensor(max_params))
+
+        # Reactant stoichiometry is a structural property. Closures that need
+        # explicit reactant counts (e.g. mass-action) expose .reactant_stoichiometry.
+        # For others (e.g. Hill), the default (-net_change).clamp(0) is correct.
+        if hasattr(prop, "reactant_stoichiometry"):
+            reactant_rows.append(prop.reactant_stoichiometry.float())
+        else:
+            reactant_rows.append((-stoichiometry[r]).clamp(min=0).float())
 
     return CRNTensorRepr(
         stoichiometry=stoichiometry,
@@ -181,14 +152,13 @@ def tensor_repr_to_crn(tensor_repr: CRNTensorRepr) -> "CRN":
     for r in range(tensor_repr.n_reactions):
         type_id = int(tensor_repr.propensity_type_ids[r].item())
         params = tensor_repr.propensity_params[r]
-        reactant_row = tensor_repr.reactant_matrix[r]
         stoich = tensor_repr.stoichiometry[r]
 
         if type_id == PropensityType.MASS_ACTION.value:
-            ma_params = MassActionParams.from_tensor(params, reactant_row)
+            k = MassActionParams.from_tensor(params).rate_constant
             propensity_fn = mass_action(
-                rate_constant=ma_params.rate_constant,
-                reactant_stoichiometry=ma_params.reactant_stoichiometry,
+                rate_constant=k,
+                reactant_stoichiometry=tensor_repr.reactant_matrix[r],
             )
         elif type_id == PropensityType.HILL.value:
             hill_params = HillParams.from_tensor(params)

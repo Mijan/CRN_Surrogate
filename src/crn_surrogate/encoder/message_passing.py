@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from crn_surrogate.encoder.tensor_repr import BipartiteEdges
+from crn_surrogate.encoder.graph_utils import BipartiteEdges
 
 
 class MessagePassingLayer(nn.Module):
@@ -26,7 +26,7 @@ class MessagePassingLayer(nn.Module):
         # Reaction → Species
         self._mlp_rs = nn.Sequential(
             nn.Linear(d_model + self._EDGE_FEAT_DIM, d_model),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(d_model, d_model),
         )
         self._norm_s = nn.LayerNorm(d_model)
@@ -34,7 +34,7 @@ class MessagePassingLayer(nn.Module):
         # Species → Reaction
         self._mlp_sr = nn.Sequential(
             nn.Linear(d_model + self._EDGE_FEAT_DIM, d_model),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(d_model, d_model),
         )
         self._norm_r = nn.LayerNorm(d_model)

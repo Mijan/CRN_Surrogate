@@ -189,6 +189,51 @@ what the notebook needs, extend the API.
 - If a notebook needs a custom training variant, subclass the Trainer or
   pass configuration, do not copy-paste the loop.
 
+### Distinguish structural properties from behavioral properties
+
+A domain object often has two kinds of information: what it IS (structure)
+and what it DOES (behavior). These should be represented separately, and
+derived properties should not be conflated with defining properties.
+
+- If two properties of an object seem related but can diverge in edge cases,
+  they are separate concepts and must be stored or computed independently.
+- Example: in a reaction network, "which species change when this reaction
+  fires" (stoichiometry) and "which species influence how fast this reaction
+  fires" (dependency) are distinct. They overlap for mass-action kinetics but
+  diverge for catalytic reactions. Never derive one from the other.
+- Properties that can be computed from defining properties should be exposed
+  as derived `@property` methods, not stored as redundant fields. If
+  computation is expensive, use caching.
+
+### Never import private symbols across module boundaries
+
+If a symbol has a leading underscore, it is internal to its module. Other
+modules must not import it. This is not a suggestion; it is a hard boundary.
+
+- If module B needs to dispatch on the type of an object created by module A,
+  use a protocol (`hasattr` check), a registry keyed on a public type
+  (e.g., the params dataclass type), or a method on the object itself. Never
+  use `isinstance` checks against private classes from another module.
+- If you find yourself importing `_FooBar` from another module, stop. Either
+  make it public (remove the underscore and commit to the interface) or
+  redesign so the import is unnecessary.
+
+### Prefer computable features over manual annotations for ML inputs
+
+When deciding what information to feed into a neural network encoder, prefer
+features that can be derived from the existing data structure over manually
+annotated categories.
+
+- Derived features (graph connectivity, stoichiometric coefficients,
+  propensity sensitivities) are always consistent with the underlying model,
+  cannot be mislabeled, and generalize to novel structures.
+- Manual annotations (reaction type labels, biological function categories)
+  require domain expertise, are incomplete by nature, and risk the model
+  shortcutting structural learning in favor of memorizing labels.
+- If the encoder struggles to distinguish important cases from structure
+  alone, enrich the computable features (e.g., add edge features, add
+  propensity sensitivity estimates) before resorting to annotations.
+
 ---
 
 ## Documentation

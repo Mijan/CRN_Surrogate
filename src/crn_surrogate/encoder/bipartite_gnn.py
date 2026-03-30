@@ -8,11 +8,12 @@ import torch.nn as nn
 
 from crn_surrogate.configs.model_config import EncoderConfig
 from crn_surrogate.encoder.embeddings import ReactionEmbedding, SpeciesEmbedding
+from crn_surrogate.encoder.graph_utils import BipartiteEdges
 from crn_surrogate.encoder.message_passing import MessagePassingLayer
-from crn_surrogate.encoder.tensor_repr import BipartiteEdges, CRNTensorRepr, build_bipartite_edges
+from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 
 
-@dataclass
+@dataclass(frozen=True)
 class CRNContext:
     """Output of the CRN encoder: contextualized node embeddings + pooled context.
 
@@ -64,9 +65,7 @@ class BipartiteGNNEncoder(nn.Module):
         Returns:
             CRNContext with species embeddings, reaction embeddings, and context vector.
         """
-        edges: BipartiteEdges = build_bipartite_edges(
-            crn_repr.stoichiometry, crn_repr.reactant_matrix
-        )
+        edges: BipartiteEdges = crn_repr.bipartite_edges
 
         h_species = self._species_embed(initial_state)
         h_reactions = self._reaction_embed(
