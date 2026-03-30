@@ -27,8 +27,8 @@ class EncoderConfig:
 
     d_model: int = 64
     n_layers: int = 3  # 3 rounds of message passing is sufficient for small CRNs
-    n_propensity_types: int = 4  # embedding table size
-    max_propensity_params: int = 4
+    n_propensity_types: int = 7  # embedding table size
+    max_propensity_params: int = 8
     max_species: int = 32
     type_embed_dim: int = 0  # 0 = auto: set to d_model // 4 in __post_init__
     dropout: float = 0.0

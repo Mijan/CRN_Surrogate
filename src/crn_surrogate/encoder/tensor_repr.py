@@ -18,8 +18,11 @@ import torch
 from crn_surrogate.crn.propensities import (
     ConstantRateParams,
     EnzymeMichaelisMentenParams,
+    HillActivationRepressionParams,
     HillParams,
+    HillRepressionParams,
     MassActionParams,
+    SubstrateInhibitionParams,
 )
 from crn_surrogate.encoder.graph_utils import BipartiteEdges, build_bipartite_edges
 
@@ -34,6 +37,9 @@ class PropensityType(Enum):
     HILL = 1
     CONSTANT_RATE = 2
     ENZYME_MICHAELIS_MENTEN = 3
+    HILL_REPRESSION = 4
+    HILL_ACTIVATION_REPRESSION = 5
+    SUBSTRATE_INHIBITION = 6
 
 
 # Registry mapping parameter dataclass type → PropensityType integer value.
@@ -44,6 +50,9 @@ _PARAMS_TO_TYPE_ID: dict[type, int] = {
     HillParams: PropensityType.HILL.value,
     ConstantRateParams: PropensityType.CONSTANT_RATE.value,
     EnzymeMichaelisMentenParams: PropensityType.ENZYME_MICHAELIS_MENTEN.value,
+    HillRepressionParams: PropensityType.HILL_REPRESSION.value,
+    HillActivationRepressionParams: PropensityType.HILL_ACTIVATION_REPRESSION.value,
+    SubstrateInhibitionParams: PropensityType.SUBSTRATE_INHIBITION.value,
 }
 
 
@@ -88,7 +97,7 @@ class CRNTensorRepr:
         return self._cached_edges  # type: ignore[attr-defined]
 
 
-def crn_to_tensor_repr(crn: "CRN", max_params: int = 4) -> CRNTensorRepr:
+def crn_to_tensor_repr(crn: "CRN", max_params: int = 8) -> CRNTensorRepr:
     """Convert a CRN to its flat tensor representation.
 
     Only propensities that expose a `.params` property whose type is
@@ -171,10 +180,16 @@ def tensor_repr_to_crn(tensor_repr: CRNTensorRepr) -> "CRN":
     """
     from crn_surrogate.crn.crn import CRN
     from crn_surrogate.crn.propensities import (
+        HillActivationRepressionParams,
+        HillRepressionParams,
+        SubstrateInhibitionParams,
         constant_rate,
         enzyme_michaelis_menten,
         hill,
+        hill_activation_repression,
+        hill_repression,
         mass_action,
+        substrate_inhibition,
     )
     from crn_surrogate.crn.reaction import Reaction
 
@@ -211,6 +226,33 @@ def tensor_repr_to_crn(tensor_repr: CRNTensorRepr) -> "CRN":
                 k_m=emm_params.k_m,
                 enzyme_index=emm_params.enzyme_index,
                 substrate_index=emm_params.substrate_index,
+            )
+        elif type_id == PropensityType.HILL_REPRESSION.value:
+            hr_params = HillRepressionParams.from_tensor(params)
+            propensity_fn = hill_repression(
+                k_max=hr_params.k_max,
+                k_half=hr_params.k_half,
+                hill_coefficient=hr_params.hill_coefficient,
+                species_index=hr_params.species_index,
+            )
+        elif type_id == PropensityType.HILL_ACTIVATION_REPRESSION.value:
+            har_params = HillActivationRepressionParams.from_tensor(params)
+            propensity_fn = hill_activation_repression(
+                k_max=har_params.k_max,
+                k_act=har_params.k_act,
+                n_act=har_params.n_act,
+                activator_index=har_params.activator_index,
+                k_rep=har_params.k_rep,
+                n_rep=har_params.n_rep,
+                repressor_index=har_params.repressor_index,
+            )
+        elif type_id == PropensityType.SUBSTRATE_INHIBITION.value:
+            si_params = SubstrateInhibitionParams.from_tensor(params)
+            propensity_fn = substrate_inhibition(
+                v_max=si_params.v_max,
+                k_m=si_params.k_m,
+                k_i=si_params.k_i,
+                species_index=si_params.species_index,
             )
         else:
             raise ValueError(

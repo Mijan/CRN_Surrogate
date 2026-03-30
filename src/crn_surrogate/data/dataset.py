@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
 from torch.utils.data import Dataset
@@ -20,12 +21,19 @@ class TrajectoryItem:
         trajectories: (M, T, n_species) M independent SSA trajectories on a regular
             time grid. M >= 2 is required to compute variance-matching loss.
         times: (T,) shared time grid for all M trajectories.
+        motif_label: String label identifying the motif type (e.g., "birth_death").
+        cluster_id: Integer cluster / class identifier assigned during dataset curation.
+            Defaults to -1 (unassigned).
+        params: Raw kinetic parameter dict used to generate this CRN instance.
     """
 
     crn_repr: CRNTensorRepr
     initial_state: torch.Tensor  # (n_species,)
     trajectories: torch.Tensor  # (M, T, n_species)
     times: torch.Tensor  # (T,)
+    motif_label: str = ""
+    cluster_id: int = -1
+    params: dict = field(default_factory=dict)
 
 
 class CRNTrajectoryDataset(Dataset):
@@ -35,11 +43,16 @@ class CRNTrajectoryDataset(Dataset):
     independent SSA trajectories on a regular time grid.
     """
 
-    def __init__(self, items: list[TrajectoryItem]) -> None:
+    def __init__(self, items: list[TrajectoryItem] | str | Path) -> None:
         """Args:
-        items: List of pre-generated TrajectoryItem instances.
+        items: Either a list of pre-generated TrajectoryItem instances, or a
+            path (str or Path) to a .pt file containing a saved list of items.
         """
-        self._items = items
+        if isinstance(items, (str, Path)):
+            loaded = torch.load(items, weights_only=False)
+            self._items = loaded
+        else:
+            self._items = items
 
     def __len__(self) -> int:
         return len(self._items)
@@ -72,6 +85,7 @@ class CRNCollator:
               times:                (B, T)
               species_mask:         (B, max_species) bool, True = valid
               reaction_mask:        (B, max_rxn) bool, True = valid
+              cluster_ids:          (B,) int, -1 if unassigned
         """
         max_species = max(item.crn_repr.n_species for item in batch)
         max_rxn = max(item.crn_repr.n_reactions for item in batch)
@@ -89,6 +103,7 @@ class CRNCollator:
         times = torch.zeros(B, T)
         species_mask = torch.zeros(B, max_species, dtype=torch.bool)
         reaction_mask = torch.zeros(B, max_rxn, dtype=torch.bool)
+        cluster_ids = torch.full((B,), fill_value=-1, dtype=torch.long)
 
         for i, item in enumerate(batch):
             ns = item.crn_repr.n_species
@@ -104,6 +119,7 @@ class CRNCollator:
             times[i] = item.times
             species_mask[i, :ns] = True
             reaction_mask[i, :nr] = True
+            cluster_ids[i] = item.cluster_id
 
         return {
             "stoichiometry": stoich,
@@ -115,4 +131,5 @@ class CRNCollator:
             "times": times,
             "species_mask": species_mask,
             "reaction_mask": reaction_mask,
+            "cluster_ids": cluster_ids,
         }

@@ -426,6 +426,383 @@ def enzyme_michaelis_menten(
     )
 
 
+# ── Hill repression propensity ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class HillRepressionParams:
+    """Named parameters for Hill-type repression kinetics.
+
+    a(X, t) = k_max / (1 + (X_s / K_half)^n)
+
+    Attributes:
+        k_max: Maximum (unrepressed) rate.
+        k_half: Half-saturation constant K_half.
+        hill_coefficient: Hill exponent n.
+        species_index: Index of the repressing species.
+    """
+
+    k_max: float
+    k_half: float
+    hill_coefficient: float
+    species_index: int
+
+    def to_tensor(self, max_params: int = 8) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [k_max, k_half, hill_coefficient, species_index, 0, 0, 0, 0].
+
+        Args:
+            max_params: Length of the output tensor (must be >= 4).
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.k_max
+        t[1] = self.k_half
+        t[2] = self.hill_coefficient
+        t[3] = self.species_index
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "HillRepressionParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with layout [k_max, k_half, hill_coefficient, species_index].
+
+        Returns:
+            HillRepressionParams instance.
+        """
+        return cls(
+            k_max=params[0].item(),
+            k_half=params[1].item(),
+            hill_coefficient=params[2].item(),
+            species_index=int(params[3].item()),
+        )
+
+
+@dataclass(frozen=True)
+class HillActivationRepressionParams:
+    """Named parameters for combined Hill activation-repression kinetics.
+
+    a(X, t) = k_max * (X_act/K_act)^n_act / (1 + (X_act/K_act)^n_act) * 1 / (1 + (X_rep/K_rep)^n_rep)
+
+    Attributes:
+        k_max: Maximum rate.
+        k_act: Half-saturation constant for the activator.
+        n_act: Hill coefficient for activation.
+        activator_index: Index of the activating species.
+        k_rep: Half-saturation constant for the repressor.
+        n_rep: Hill coefficient for repression.
+        repressor_index: Index of the repressing species.
+    """
+
+    k_max: float
+    k_act: float
+    n_act: float
+    activator_index: int
+    k_rep: float
+    n_rep: float
+    repressor_index: int
+
+    def to_tensor(self, max_params: int = 8) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [k_max, k_act, n_act, activator_index, k_rep, n_rep, repressor_index, 0].
+
+        Args:
+            max_params: Length of the output tensor (must be >= 7).
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.k_max
+        t[1] = self.k_act
+        t[2] = self.n_act
+        t[3] = self.activator_index
+        t[4] = self.k_rep
+        t[5] = self.n_rep
+        t[6] = self.repressor_index
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "HillActivationRepressionParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with layout
+                [k_max, k_act, n_act, activator_index, k_rep, n_rep, repressor_index, 0].
+
+        Returns:
+            HillActivationRepressionParams instance.
+        """
+        return cls(
+            k_max=params[0].item(),
+            k_act=params[1].item(),
+            n_act=params[2].item(),
+            activator_index=int(params[3].item()),
+            k_rep=params[4].item(),
+            n_rep=params[5].item(),
+            repressor_index=int(params[6].item()),
+        )
+
+
+@dataclass(frozen=True)
+class SubstrateInhibitionParams:
+    """Named parameters for substrate-inhibition kinetics.
+
+    a(X, t) = V_max * X_s / (K_m + X_s + X_s^2 / K_i)
+
+    Attributes:
+        v_max: Maximum rate V_max.
+        k_m: Michaelis constant K_m.
+        k_i: Inhibition constant K_i.
+        species_index: Index of the substrate species.
+    """
+
+    v_max: float
+    k_m: float
+    k_i: float
+    species_index: int
+
+    def to_tensor(self, max_params: int = 8) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [v_max, k_m, k_i, species_index, 0, 0, 0, 0].
+
+        Args:
+            max_params: Length of the output tensor (must be >= 4).
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.v_max
+        t[1] = self.k_m
+        t[2] = self.k_i
+        t[3] = self.species_index
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "SubstrateInhibitionParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with layout [v_max, k_m, k_i, species_index].
+
+        Returns:
+            SubstrateInhibitionParams instance.
+        """
+        return cls(
+            v_max=params[0].item(),
+            k_m=params[1].item(),
+            k_i=params[2].item(),
+            species_index=int(params[3].item()),
+        )
+
+
+class _HillRepressionClosure:
+    """Callable Hill repression propensity: a(X,t) = k_max / (1 + (X_s / K_half)^n)."""
+
+    def __init__(self, params: HillRepressionParams) -> None:
+        self._params = params
+
+    def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
+        p = self._params
+        x = state[p.species_index].clamp(min=0.0)
+        ratio_n = torch.pow(x / (p.k_half + 1e-8), p.hill_coefficient)
+        return torch.tensor(p.k_max) / (1.0 + ratio_n + 1e-8)
+
+    @property
+    def params(self) -> HillRepressionParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Index of the repressing species."""
+        return frozenset({self._params.species_index})
+
+    def __repr__(self) -> str:
+        p = self._params
+        return (
+            f"HillRepression(k_max={p.k_max}, k_half={p.k_half}, "
+            f"n={p.hill_coefficient}, s={p.species_index})"
+        )
+
+
+class _HillActivationRepressionClosure:
+    """Combined Hill activation-repression propensity.
+
+    a(X, t) = k_max * (X_act/K_act)^n_act / (1 + (X_act/K_act)^n_act)
+              * 1 / (1 + (X_rep/K_rep)^n_rep)
+    """
+
+    def __init__(self, params: HillActivationRepressionParams) -> None:
+        self._params = params
+        self._species_dependencies = frozenset(
+            {params.activator_index, params.repressor_index}
+        )
+
+    def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
+        p = self._params
+        x_act = state[p.activator_index].clamp(min=0.0)
+        x_rep = state[p.repressor_index].clamp(min=0.0)
+        act_ratio_n = torch.pow(x_act / (p.k_act + 1e-8), p.n_act)
+        rep_ratio_n = torch.pow(x_rep / (p.k_rep + 1e-8), p.n_rep)
+        activation = act_ratio_n / (1.0 + act_ratio_n + 1e-8)
+        repression = 1.0 / (1.0 + rep_ratio_n + 1e-8)
+        return torch.tensor(p.k_max) * activation * repression
+
+    @property
+    def params(self) -> HillActivationRepressionParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Activator and repressor both influence this propensity."""
+        return self._species_dependencies
+
+    def __repr__(self) -> str:
+        p = self._params
+        return (
+            f"HillActRep(k_max={p.k_max}, act={p.activator_index}, "
+            f"rep={p.repressor_index})"
+        )
+
+
+class _SubstrateInhibitionClosure:
+    """Callable substrate-inhibition propensity.
+
+    a(X, t) = V_max * X_s / (K_m + X_s + X_s^2 / K_i)
+    """
+
+    def __init__(self, params: SubstrateInhibitionParams) -> None:
+        self._params = params
+
+    def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
+        p = self._params
+        x = state[p.species_index].clamp(min=0.0)
+        denominator = p.k_m + x + x**2 / (p.k_i + 1e-8) + 1e-8
+        return torch.tensor(p.v_max) * x / denominator
+
+    @property
+    def params(self) -> SubstrateInhibitionParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Index of the substrate species."""
+        return frozenset({self._params.species_index})
+
+    def __repr__(self) -> str:
+        p = self._params
+        return (
+            f"SubstrateInhibition(V_max={p.v_max}, K_m={p.k_m}, "
+            f"K_i={p.k_i}, s={p.species_index})"
+        )
+
+
+def hill_repression(
+    k_max: float,
+    k_half: float,
+    hill_coefficient: float,
+    species_index: int,
+) -> PropensityFn:
+    """Create a Hill repression propensity: a(X,t) = k_max / (1 + (X_s / K_half)^n).
+
+    Args:
+        k_max: Maximum (unrepressed) rate.
+        k_half: Half-saturation constant K_half.
+        hill_coefficient: Hill exponent n.
+        species_index: Index of the repressing species.
+
+    Returns:
+        Callable (state, t) -> scalar propensity.
+    """
+    return _HillRepressionClosure(
+        HillRepressionParams(
+            k_max=k_max,
+            k_half=k_half,
+            hill_coefficient=hill_coefficient,
+            species_index=species_index,
+        )
+    )
+
+
+def hill_activation_repression(
+    k_max: float,
+    k_act: float,
+    n_act: float,
+    activator_index: int,
+    k_rep: float,
+    n_rep: float,
+    repressor_index: int,
+) -> PropensityFn:
+    """Create a combined Hill activation-repression propensity.
+
+    a(X, t) = k_max * (X_act/K_act)^n_act / (1 + (X_act/K_act)^n_act)
+              * 1 / (1 + (X_rep/K_rep)^n_rep)
+
+    Args:
+        k_max: Maximum rate.
+        k_act: Half-saturation constant for the activator.
+        n_act: Hill coefficient for activation.
+        activator_index: Index of the activating species.
+        k_rep: Half-saturation constant for the repressor.
+        n_rep: Hill coefficient for repression.
+        repressor_index: Index of the repressing species.
+
+    Returns:
+        Callable (state, t) -> scalar propensity.
+    """
+    return _HillActivationRepressionClosure(
+        HillActivationRepressionParams(
+            k_max=k_max,
+            k_act=k_act,
+            n_act=n_act,
+            activator_index=activator_index,
+            k_rep=k_rep,
+            n_rep=n_rep,
+            repressor_index=repressor_index,
+        )
+    )
+
+
+def substrate_inhibition(
+    v_max: float,
+    k_m: float,
+    k_i: float,
+    species_index: int,
+) -> PropensityFn:
+    """Create a substrate-inhibition propensity.
+
+    a(X, t) = V_max * X_s / (K_m + X_s + X_s^2 / K_i)
+
+    Args:
+        v_max: Maximum rate V_max.
+        k_m: Michaelis constant K_m.
+        k_i: Inhibition constant K_i.
+        species_index: Index of the substrate species.
+
+    Returns:
+        Callable (state, t) -> scalar propensity.
+    """
+    return _SubstrateInhibitionClosure(
+        SubstrateInhibitionParams(
+            v_max=v_max,
+            k_m=k_m,
+            k_i=k_i,
+            species_index=species_index,
+        )
+    )
+
+
 # ── Serialization protocols ───────────────────────────────────────────────────
 
 
