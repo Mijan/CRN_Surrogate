@@ -39,12 +39,17 @@ class TrainingResult:
         val_losses: Validation rollout losses recorded every val_every epochs.
         val_nll_losses: Validation NLL losses recorded every val_every epochs.
         val_epochs: Epoch indices corresponding to val_losses (1-indexed).
+        grad_norms: Per-epoch mean gradient norm (pre-clipping). Free to
+            compute since clip_grad_norm_ already calculates it.
+        learning_rates: Learning rate at the end of each epoch.
     """
 
     train_losses: list[float] = field(default_factory=list)
     val_losses: list[float] = field(default_factory=list)
     val_nll_losses: list[float] = field(default_factory=list)
     val_epochs: list[int] = field(default_factory=list)
+    grad_norms: list[float] = field(default_factory=list)
+    learning_rates: list[float] = field(default_factory=list)
 
 
 class Trainer:
@@ -131,8 +136,10 @@ class Trainer:
 
         for epoch in range(1, self._train_config.max_epochs + 1):
             self._timer = PhaseTimer(device=self._timer.device)
-            train_loss = self._train_epoch(train_loader, epoch)
+            train_loss, mean_grad_norm = self._train_epoch(train_loader, epoch)
             result.train_losses.append(train_loss)
+            result.grad_norms.append(mean_grad_norm)
+            result.learning_rates.append(self._optimizer.param_groups[0]["lr"])
 
             val_loss: float | None = None
             val_nll: float | None = None
@@ -144,14 +151,22 @@ class Trainer:
                 self._maybe_checkpoint(val_loss, epoch)
                 print(
                     f"Epoch {epoch:4d} | train={train_loss:.4f} | "
-                    f"val={val_loss:.4f} | val_nll={val_nll:.4f}"
+                    f"val={val_loss:.4f} | val_nll={val_nll:.4f} | "
+                    f"grad={mean_grad_norm:.3f}"
                 )
             else:
-                print(f"Epoch {epoch:4d} | train={train_loss:.4f}")
+                print(
+                    f"Epoch {epoch:4d} | train={train_loss:.4f} | grad={mean_grad_norm:.3f}"
+                )
 
             self._csv_logger.log_epoch(epoch, self._timer)
             if self._wandb is not None:
-                metrics: dict = {"epoch": epoch, "train_loss": train_loss}
+                metrics: dict = {
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "grad_norm": mean_grad_norm,
+                    "lr": self._optimizer.param_groups[0]["lr"],
+                }
                 if val_loss is not None:
                     metrics["val_loss"] = val_loss
                 if val_nll is not None:
@@ -166,11 +181,12 @@ class Trainer:
 
         return result
 
-    def _train_epoch(self, loader: DataLoader, epoch: int) -> float:
-        """Run one training epoch and return mean loss."""
+    def _train_epoch(self, loader: DataLoader, epoch: int) -> tuple[float, float]:
+        """Run one training epoch and return (mean loss, mean pre-clip grad norm)."""
         self._encoder.train()
         self._sde.train()
         total_loss = 0.0
+        batch_grad_norms: list[float] = []
         n_batches = 0
 
         for batch in tqdm(loader, desc="train", leave=False):
@@ -182,17 +198,21 @@ class Trainer:
             self._optimizer.zero_grad()
             with self._timer.time("backward"):
                 loss.backward()
-            nn.utils.clip_grad_norm_(
+            # clip_grad_norm_ returns the pre-clipping total norm — free diagnostic
+            total_norm = nn.utils.clip_grad_norm_(
                 list(self._encoder.parameters()) + list(self._sde.parameters()),
                 self._train_config.grad_clip_norm,
             )
+            batch_grad_norms.append(total_norm.item())
             self._optimizer.step()
 
             total_loss += loss.item()
             n_batches += 1
             self._timer.end_batch()
 
-        return total_loss / max(n_batches, 1)
+        denom = max(n_batches, 1)
+        mean_grad_norm = sum(batch_grad_norms) / denom
+        return total_loss / denom, mean_grad_norm
 
     def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
         """Compute mean loss over all items in the batch."""
