@@ -16,13 +16,12 @@ import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
+from crn_surrogate.crn.examples import birth_death
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
-from crn_surrogate.data.gillespie import (
-    GillespieSSA,
-    birth_death_crn,
-    interpolate_to_grid,
-)
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
+from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
+from crn_surrogate.simulation.gillespie import GillespieSSA
+from crn_surrogate.simulation.interpolation import interpolate_to_grid
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer
 
@@ -31,7 +30,7 @@ from crn_surrogate.training.trainer import Trainer
 
 def _small_model():
     """Tiny model (d_model=8) for fast unit tests."""
-    crn = birth_death_crn(k1=2.0, k2=0.5)
+    crn = birth_death(k_birth=2.0, k_death=0.5)
     model_config = ModelConfig(
         encoder=EncoderConfig(d_model=8, n_layers=1),
         sde=SDEConfig.from_crn(crn, d_model=8, d_hidden=16),
@@ -48,13 +47,24 @@ def _make_dataset(
     ssa = GillespieSSA()
     time_grid = torch.linspace(0.0, 5.0, T)
     init = torch.tensor([0.0])
+    crn_repr = crn_to_tensor_repr(crn)
     items = []
     for _ in range(n_items):
         trajs = torch.stack(
             [
                 interpolate_to_grid(
-                    ssa.simulate(crn, init.clone(), t_max=5.0).times,
-                    ssa.simulate(crn, init.clone(), t_max=5.0).states,
+                    ssa.simulate(
+                        crn.stoichiometry_matrix,
+                        crn.evaluate_propensities,
+                        init.clone(),
+                        t_max=5.0,
+                    ).times,
+                    ssa.simulate(
+                        crn.stoichiometry_matrix,
+                        crn.evaluate_propensities,
+                        init.clone(),
+                        t_max=5.0,
+                    ).states,
                     time_grid,
                 )
                 for _ in range(M)
@@ -62,7 +72,10 @@ def _make_dataset(
         )
         items.append(
             TrajectoryItem(
-                crn=crn, initial_state=init.clone(), trajectories=trajs, times=time_grid
+                crn_repr=crn_repr,
+                initial_state=init.clone(),
+                trajectories=trajs,
+                times=time_grid,
             )
         )
     return CRNTrajectoryDataset(items)

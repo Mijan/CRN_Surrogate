@@ -42,7 +42,7 @@ the replacement count with the user before committing.
 
 ### Classes and OOP
 
-- All class members must be **private** (`__` prefix) or **protected** (`_`
+- All class members must be **private** (`_` prefix) or **protected** (`_`
   prefix) by default. Only expose through `@property` getters. Provide
   setters only when mutation is explicitly part of the design.
 - Use `@dataclass(frozen=True)` for all value objects and configuration.
@@ -91,6 +91,103 @@ the replacement count with the user before committing.
   abstraction into a third module.
 - Keep module files focused. A module with more than ~300 lines likely needs
   splitting.
+
+---
+
+## Architectural Design Principles
+
+These principles govern how classes and modules are structured. They are not
+optional style preferences; they are hard requirements that prevent the kind
+of design drift that creates bugs and technical debt.
+
+### Classes must mirror the domain, not the implementation
+
+When designing a class, ask: "what is this thing mathematically / conceptually?"
+The fields and methods should match that answer, nothing more.
+
+- If a mathematical object is defined by X and Y, the class should contain X
+  and Y. Do not add Z because some algorithm that consumes the object needs Z.
+  That algorithm should derive Z from X and Y, or Z should live on the
+  algorithm's side.
+- Example: a Chemical Reaction Network is defined by stoichiometry + propensity
+  functions. A "reactant matrix" is an implementation detail of mass-action
+  kinetics and does not belong on the CRN class.
+
+### No free-floating functions for logic that has state or identity
+
+If a function constructs something, transforms something, or dispatches based
+on type, it likely belongs as a classmethod, factory method, or method on an
+enum. Free functions are acceptable only for pure stateless utilities (math
+helpers, tensor manipulation).
+
+- Factory functions that select a subclass based on an enum value should be a
+  method on the enum itself, or a classmethod on the base class.
+- If a function closes over parameters and returns a callable, make it a
+  callable class with `__call__` so the captured parameters are inspectable
+  via properties. Raw lambdas are acceptable only for throwaway one-liners in
+  tests or examples, never in production code paths.
+
+### Orthogonality: consumers must not know about producers
+
+Modules should depend on interfaces, not on each other. Specifically:
+
+- A simulator (Gillespie, ODE solver) should accept generic inputs (a
+  stoichiometry matrix + a callable) not a domain object (CRN). The domain
+  object can provide what the simulator needs via a method, but the simulator
+  never imports the domain class.
+- A neural network encoder should consume a tensor representation, not a
+  symbolic domain object. The conversion between symbolic and tensor
+  representations happens at an explicit boundary (a dedicated converter
+  module), not inside the encoder.
+- Notebooks and scripts should use the library's public API (Trainer.train(),
+  not a reimplementation of the training loop). If the API is inconvenient,
+  fix the API, do not duplicate it.
+
+### No silent fallbacks for missing data
+
+If a loss function requires M >= 2 samples to compute variance, and it
+receives M = 1, it must raise a ValueError, not silently return zero. Silent
+fallbacks hide bugs. The caller made an error (passed insufficient data) and
+must be told.
+
+- Never return a zero tensor as a "safe default" for a loss that cannot be
+  computed. This creates a gradient dead zone that is invisible during
+  training.
+- Never silently squeeze, unsqueeze, or reshape tensors to make shapes
+  match. If the input has the wrong number of dimensions, raise a clear error
+  stating the expected and actual shapes.
+
+### Parameters belong inside closures, not alongside them
+
+When a function is parameterized (e.g., a propensity function with rate
+constants), the parameters should be captured at construction time, not
+passed separately at every call site.
+
+- Bad: store `propensity_fn` and `propensity_params` as parallel fields,
+  pass params to fn at every evaluation.
+- Good: the propensity callable captures its params in a closure. The call
+  site just invokes `propensity(state, t)` with no extra arguments.
+- The closure should be a callable class (not a raw lambda) so that captured
+  parameters are accessible via a `.params` property for serialization and
+  debugging.
+
+### Positional indexing into flat tensors is not an API
+
+If a tensor has semantic slots (e.g., params[0] = rate_constant, params[1] =
+k_m), the mapping must be defined in exactly one place (a frozen dataclass
+with `to_tensor()` / `from_tensor()` methods). No code outside that dataclass
+should index into the tensor by position.
+
+### Notebooks must use the library, not reimplement it
+
+If a notebook contains more than 10 lines of logic that duplicates a library
+class (e.g., a training loop that mirrors the Trainer), that is a bug. The
+notebook should call the library's public API. If the API does not support
+what the notebook needs, extend the API.
+
+- Trainer should return a result object that notebooks can plot directly.
+- If a notebook needs a custom training variant, subclass the Trainer or
+  pass configuration, do not copy-paste the loop.
 
 ---
 

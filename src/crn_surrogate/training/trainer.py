@@ -1,3 +1,4 @@
+"""End-to-end training loop for the CRN neural surrogate."""
 from __future__ import annotations
 
 import os
@@ -11,10 +12,9 @@ from tqdm import tqdm
 
 from crn_surrogate.configs.model_config import ModelConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
-from crn_surrogate.data.crn import CRNDefinition
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
-from crn_surrogate.data.propensities import PropensityType
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
+from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.losses import CombinedTrajectoryLoss, TrajectoryLoss
@@ -182,14 +182,14 @@ class Trainer:
 
     def _compute_item_loss(self, batch: dict, idx: int) -> torch.Tensor:
         """Compute loss for a single item in the batch."""
-        crn = self._reconstruct_crn(batch, idx)
-        n_species = int(batch["species_mask"][idx].sum().item())
+        crn_repr = self._reconstruct_tensor_repr(batch, idx)
+        n_species = crn_repr.n_species
         init_state = batch["initial_states"][idx, :n_species]
         # (M, T, n_species) — full set of SSA ground-truth trajectories
         true_trajs = batch["trajectories"][idx, :, :, :n_species]
         times = batch["times"][idx]
 
-        ctx = self._encoder(crn, init_state)
+        ctx = self._encoder(crn_repr, init_state)
 
         k = self._train_config.n_sde_samples
         pred_samples = [
@@ -203,22 +203,16 @@ class Trainer:
         species_mask = batch["species_mask"][idx, :n_species]
         return self._loss_fn.compute(pred_states, true_trajs, mask=species_mask)
 
-    def _reconstruct_crn(self, batch: dict, idx: int) -> CRNDefinition:
-        """Reconstruct a CRNDefinition from a padded batch dict for item idx."""
+    def _reconstruct_tensor_repr(self, batch: dict, idx: int) -> CRNTensorRepr:
+        """Reconstruct a CRNTensorRepr from a padded batch dict for item idx."""
         n_species = int(batch["species_mask"][idx].sum().item())
         n_reactions = int(batch["reaction_mask"][idx].sum().item())
 
-        stoich = batch["stoichiometry"][idx, :n_reactions, :n_species]
-        reactants = batch["reactant_matrix"][idx, :n_reactions, :n_species]
-        params = batch["propensity_params"][idx, :n_reactions]
-        type_ids = batch["propensity_type_ids"][idx, :n_reactions]
-        ptypes = tuple(PropensityType(int(t.item())) for t in type_ids)
-
-        return CRNDefinition(
-            stoichiometry=stoich,
-            reactant_matrix=reactants,
-            propensity_types=ptypes,
-            propensity_params=params,
+        return CRNTensorRepr(
+            stoichiometry=batch["stoichiometry"][idx, :n_reactions, :n_species],
+            reactant_matrix=batch["reactant_matrix"][idx, :n_reactions, :n_species],
+            propensity_type_ids=batch["propensity_type_ids"][idx, :n_reactions],
+            propensity_params=batch["propensity_params"][idx, :n_reactions],
         )
 
     def _validate(self, val_dataset: CRNTrajectoryDataset) -> float:

@@ -1,3 +1,4 @@
+"""Dataset and collation utilities for CRN trajectory training data."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,22 +6,22 @@ from dataclasses import dataclass
 import torch
 from torch.utils.data import Dataset
 
-from crn_surrogate.data.crn import CRNDefinition
+from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 
 
 @dataclass
 class TrajectoryItem:
-    """Single training example: a CRN instance with M ground-truth SSA trajectories.
+    """Single training example: a CRN tensor representation with M ground-truth SSA trajectories.
 
     Attributes:
-        crn: The CRN definition.
+        crn_repr: Flat tensor representation of the CRN for the encoder.
         initial_state: (n_species,) initial molecule counts.
         trajectories: (M, T, n_species) M independent SSA trajectories on a regular
             time grid. M >= 2 is required to compute variance-matching loss.
         times: (T,) shared time grid for all M trajectories.
     """
 
-    crn: CRNDefinition
+    crn_repr: CRNTensorRepr
     initial_state: torch.Tensor  # (n_species,)
     trajectories: torch.Tensor  # (M, T, n_species)
     times: torch.Tensor  # (T,)
@@ -29,8 +30,8 @@ class TrajectoryItem:
 class CRNTrajectoryDataset(Dataset):
     """Pre-generated Gillespie trajectories for multiple CRN instances.
 
-    Each item contains a CRN definition, an initial state, and M independent
-    SSA trajectories on a regular time grid.
+    Each item contains a CRN tensor representation, an initial state, and M
+    independent SSA trajectories on a regular time grid.
     """
 
     def __init__(self, items: list[TrajectoryItem]) -> None:
@@ -49,8 +50,8 @@ class CRNTrajectoryDataset(Dataset):
 class CRNCollator:
     """Pads stoichiometry matrices and trajectories to the max sizes in the batch.
 
-    Returns padding masks for species and reactions so that
-    message passing and loss computation ignore padded entries.
+    Returns padding masks for species and reactions so that message passing
+    and loss computation can ignore padded entries.
     """
 
     def __call__(self, batch: list[TrajectoryItem]) -> dict:
@@ -71,9 +72,9 @@ class CRNCollator:
               species_mask:         (B, max_species) bool, True = valid
               reaction_mask:        (B, max_rxn) bool, True = valid
         """
-        max_species = max(item.crn.n_species for item in batch)
-        max_rxn = max(item.crn.n_reactions for item in batch)
-        max_params = max(item.crn.propensity_params.shape[1] for item in batch)
+        max_species = max(item.crn_repr.n_species for item in batch)
+        max_rxn = max(item.crn_repr.n_reactions for item in batch)
+        max_params = max(item.crn_repr.propensity_params.shape[1] for item in batch)
         M = batch[0].trajectories.shape[0]
         T = batch[0].trajectories.shape[1]
         B = len(batch)
@@ -89,16 +90,14 @@ class CRNCollator:
         reaction_mask = torch.zeros(B, max_rxn, dtype=torch.bool)
 
         for i, item in enumerate(batch):
-            ns = item.crn.n_species
-            nr = item.crn.n_reactions
-            np_ = item.crn.propensity_params.shape[1]
+            ns = item.crn_repr.n_species
+            nr = item.crn_repr.n_reactions
+            np_ = item.crn_repr.propensity_params.shape[1]
 
-            stoich[i, :nr, :ns] = item.crn.stoichiometry
-            reactants[i, :nr, :ns] = item.crn.reactant_matrix
-            prop_params[i, :nr, :np_] = item.crn.propensity_params
-            prop_type_ids[i, :nr] = torch.tensor(
-                [pt.value for pt in item.crn.propensity_types]
-            )
+            stoich[i, :nr, :ns] = item.crn_repr.stoichiometry
+            reactants[i, :nr, :ns] = item.crn_repr.reactant_matrix
+            prop_params[i, :nr, :np_] = item.crn_repr.propensity_params
+            prop_type_ids[i, :nr] = item.crn_repr.propensity_type_ids
             init_states[i, :ns] = item.initial_state
             trajs[i, :, :, :ns] = item.trajectories
             times[i] = item.times

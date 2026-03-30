@@ -1,3 +1,4 @@
+"""Bipartite GNN encoder that maps a CRNTensorRepr to contextualized embeddings."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,9 +7,9 @@ import torch
 import torch.nn as nn
 
 from crn_surrogate.configs.model_config import EncoderConfig
-from crn_surrogate.data.crn import CRNDefinition, build_bipartite_edges
 from crn_surrogate.encoder.embeddings import ReactionEmbedding, SpeciesEmbedding
 from crn_surrogate.encoder.message_passing import MessagePassingLayer
+from crn_surrogate.encoder.tensor_repr import BipartiteEdges, CRNTensorRepr, build_bipartite_edges
 
 
 @dataclass
@@ -29,8 +30,12 @@ class CRNContext:
 class BipartiteGNNEncoder(nn.Module):
     """Bipartite GNN encoder for Chemical Reaction Networks.
 
-    Produces contextualized species and reaction embeddings via
-    L rounds of alternating message passing over the species-reaction graph.
+    Consumes a CRNTensorRepr (flat tensor representation) rather than the
+    symbolic CRN object. The conversion from CRN to CRNTensorRepr is handled
+    by crn_surrogate.encoder.tensor_repr.crn_to_tensor_repr.
+
+    Produces contextualized species and reaction embeddings via L rounds of
+    alternating message passing over the species-reaction bipartite graph.
     """
 
     def __init__(self, config: EncoderConfig) -> None:
@@ -47,24 +52,26 @@ class BipartiteGNNEncoder(nn.Module):
 
     def forward(
         self,
-        crn: CRNDefinition,
+        crn_repr: CRNTensorRepr,
         initial_state: torch.Tensor,
     ) -> CRNContext:
-        """Encode a CRN and return contextualized embeddings.
+        """Encode a CRN tensor representation and return contextualized embeddings.
 
         Args:
-            crn: The CRN definition.
+            crn_repr: Flat tensor representation of the CRN.
             initial_state: (n_species,) initial molecular counts.
 
         Returns:
             CRNContext with species embeddings, reaction embeddings, and context vector.
         """
-        edges = build_bipartite_edges(crn.stoichiometry, crn.reactant_matrix)
+        edges: BipartiteEdges = build_bipartite_edges(
+            crn_repr.stoichiometry, crn_repr.reactant_matrix
+        )
 
         h_species = self._species_embed(initial_state)
         h_reactions = self._reaction_embed(
-            torch.tensor([pt.value for pt in crn.propensity_types]),
-            crn.propensity_params,
+            crn_repr.propensity_type_ids,
+            crn_repr.propensity_params,
         )
 
         for layer in self._layers:

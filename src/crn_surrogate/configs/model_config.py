@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from crn_surrogate.data.crn import CRNDefinition
+    from crn_surrogate.crn.crn import CRN
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class SDEConfig:
     @classmethod
     def from_crn(
         cls,
-        crn: "CRNDefinition",
+        crn: "CRN",
         d_model: int = 64,
         d_hidden: int = 128,
         clip_state: bool = True,

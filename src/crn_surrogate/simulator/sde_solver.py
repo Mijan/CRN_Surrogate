@@ -5,7 +5,7 @@ import torch
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
-from crn_surrogate.simulator.trajectory import Trajectory
+from crn_surrogate.simulation.trajectory import Trajectory
 
 
 class EulerMaruyamaSolver:

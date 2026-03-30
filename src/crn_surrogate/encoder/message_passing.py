@@ -1,9 +1,10 @@
+"""Bipartite message-passing layer for species-reaction graphs."""
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 
-from crn_surrogate.data.crn import BipartiteEdges
+from crn_surrogate.encoder.tensor_repr import BipartiteEdges
 
 
 class MessagePassingLayer(nn.Module):
