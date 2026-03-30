@@ -86,13 +86,32 @@ class CRN:
         return self._stoichiometry_matrix
 
     @property
-    def reactant_matrix(self) -> torch.Tensor:
-        """(n_reactions, n_species) consumption counts derived from stoichiometry.
+    def dependency_matrix(self) -> torch.Tensor:
+        """(n_reactions, n_species) binary matrix of propensity dependencies.
 
-        Entry [r, s] is the number of molecules of species s consumed when
-        reaction r fires. Equals max(0, -S[r, s]).
+        Entry [r, s] is 1.0 if species s influences the rate of reaction r,
+        derived from each reaction's propensity.species_dependencies. If a
+        propensity does not declare dependencies, all species are assumed to
+        be dependencies and a warning is issued.
         """
-        return (-self.stoichiometry_matrix).clamp(min=0)
+        import warnings
+
+        rows = []
+        for rxn in self._reactions:
+            prop = rxn.propensity
+            row = torch.zeros(self._n_species)
+            if hasattr(prop, "species_dependencies"):
+                for s in prop.species_dependencies:
+                    row[s] = 1.0
+            else:
+                warnings.warn(
+                    f"Propensity {type(prop).__name__!r} does not declare "
+                    f"species_dependencies; assuming all species are dependencies.",
+                    stacklevel=2,
+                )
+                row = torch.ones(self._n_species)
+            rows.append(row)
+        return torch.stack(rows, dim=0)
 
     def evaluate_propensities(
         self, state: torch.Tensor, t: float = 0.0

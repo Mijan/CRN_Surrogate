@@ -14,7 +14,7 @@ class MessagePassingLayer(nn.Module):
     Edge features have dimension 2 (reactant_count, net_change).
     """
 
-    _EDGE_FEAT_DIM: int = 2
+    _EDGE_FEAT_DIM: int = 3
 
     def __init__(self, d_model: int) -> None:
         """Args:

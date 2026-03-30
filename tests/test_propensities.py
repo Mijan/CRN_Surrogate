@@ -11,9 +11,12 @@ import pytest
 import torch
 
 from crn_surrogate.crn.propensities import (
+    ConstantRateParams,
+    EnzymeMichaelisMentenParams,
     HillParams,
     MassActionParams,
     constant_rate,
+    enzyme_michaelis_menten,
     hill,
     mass_action,
 )
@@ -149,3 +152,79 @@ def test_hill_params_round_trip():
     assert reconstructed.k_m == pytest.approx(2.0)
     assert reconstructed.hill_coefficient == pytest.approx(3.0)
     assert reconstructed.species_index == 1
+
+
+# ── constant_rate ──────────────────────────────────────────────────────────────
+
+
+def test_constant_rate_has_params_property():
+    prop = constant_rate(k=5.0)
+    assert hasattr(prop, "params")
+    assert prop.params.rate == pytest.approx(5.0)
+
+
+def test_constant_rate_has_empty_species_dependencies():
+    prop = constant_rate(k=1.0)
+    assert prop.species_dependencies == frozenset()
+
+
+def test_constant_rate_params_round_trip():
+    params = ConstantRateParams(rate=3.7)
+    t = params.to_tensor(max_params=4)
+    assert t[0].item() == pytest.approx(3.7)
+    reconstructed = ConstantRateParams.from_tensor(t)
+    assert reconstructed.rate == pytest.approx(3.7)
+
+
+# ── enzyme_michaelis_menten ────────────────────────────────────────────────────
+
+
+def test_enzyme_mm_propensity_rate_proportional_to_enzyme():
+    prop = enzyme_michaelis_menten(k_cat=1.0, k_m=10.0, enzyme_index=0, substrate_index=1)
+    state_low_enzyme  = torch.tensor([1.0, 50.0])
+    state_high_enzyme = torch.tensor([10.0, 50.0])
+    assert prop(state_low_enzyme, 0.0).item() < prop(state_high_enzyme, 0.0).item()
+
+
+def test_enzyme_mm_propensity_saturates_at_high_substrate():
+    prop = enzyme_michaelis_menten(k_cat=2.0, k_m=1.0, enzyme_index=0, substrate_index=1)
+    state_low  = torch.tensor([5.0, 0.5])
+    state_high = torch.tensor([5.0, 500.0])
+    rate_low  = prop(state_low, 0.0).item()
+    rate_high = prop(state_high, 0.0).item()
+    # At high substrate the rate approaches k_cat * enzyme
+    assert rate_high == pytest.approx(2.0 * 5.0, rel=0.01)
+    assert rate_high > rate_low
+
+
+def test_enzyme_mm_dependencies_contain_both_enzyme_and_substrate():
+    prop = enzyme_michaelis_menten(k_cat=1.0, k_m=1.0, enzyme_index=2, substrate_index=4)
+    assert prop.species_dependencies == frozenset({2, 4})
+
+
+def test_enzyme_mm_params_round_trip():
+    params = EnzymeMichaelisMentenParams(k_cat=0.5, k_m=8.0, enzyme_index=1, substrate_index=3)
+    t = params.to_tensor(max_params=4)
+    reconstructed = EnzymeMichaelisMentenParams.from_tensor(t)
+    assert reconstructed.k_cat == pytest.approx(0.5)
+    assert reconstructed.k_m == pytest.approx(8.0)
+    assert reconstructed.enzyme_index == 1
+    assert reconstructed.substrate_index == 3
+
+
+# ── species_dependencies on existing closures ─────────────────────────────────
+
+
+def test_mass_action_species_dependencies_nonzero_reactants():
+    prop = mass_action(rate_constant=1.0, reactant_stoichiometry=torch.tensor([1.0, 0.0, 1.0]))
+    assert prop.species_dependencies == frozenset({0, 2})
+
+
+def test_mass_action_zero_order_has_empty_dependencies():
+    prop = mass_action(rate_constant=2.0, reactant_stoichiometry=torch.tensor([0.0]))
+    assert prop.species_dependencies == frozenset()
+
+
+def test_hill_species_dependencies_is_singleton():
+    prop = hill(v_max=1.0, k_m=1.0, hill_coefficient=2.0, species_index=3)
+    assert prop.species_dependencies == frozenset({3})

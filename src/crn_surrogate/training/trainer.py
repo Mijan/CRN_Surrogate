@@ -210,7 +210,7 @@ class Trainer:
 
         return CRNTensorRepr(
             stoichiometry=batch["stoichiometry"][idx, :n_reactions, :n_species],
-            reactant_matrix=batch["reactant_matrix"][idx, :n_reactions, :n_species],
+            dependency_matrix=batch["dependency_matrix"][idx, :n_reactions, :n_species],
             propensity_type_ids=batch["propensity_type_ids"][idx, :n_reactions],
             propensity_params=batch["propensity_params"][idx, :n_reactions],
         )

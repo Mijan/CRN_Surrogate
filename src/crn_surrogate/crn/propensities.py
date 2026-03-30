@@ -1,8 +1,9 @@
-"""Standard propensity function factories for mass-action, Hill, and constant-rate kinetics.
+"""Standard propensity function factories for mass-action, Hill, enzyme-catalyzed MM, and constant-rate kinetics.
 
 Each factory returns a PropensityFn callable that captures kinetic parameters at
 construction time. Callables are implemented as classes (not lambdas) so that
-their parameters are inspectable via a `.params` property for serialization.
+their parameters are inspectable via a `.params` property and their species
+dependencies are declared via `.species_dependencies`.
 """
 from __future__ import annotations
 
@@ -21,9 +22,8 @@ from crn_surrogate.crn.reaction import PropensityFn
 class MassActionParams:
     """Named parameters for mass-action kinetics.
 
-    Only the rate constant is stored here. The reactant stoichiometry is a
-    structural property encoded in the CRN's stoichiometry matrix and is
-    not a kinetic parameter.
+    Only the rate constant is stored. The reactant stoichiometry is a
+    structural property captured in the closure for evaluation.
 
     Attributes:
         rate_constant: Rate constant k.
@@ -94,7 +94,7 @@ class HillParams:
         return t
 
     @classmethod
-    def from_tensor(cls, params: torch.Tensor) -> HillParams:
+    def from_tensor(cls, params: torch.Tensor) -> "HillParams":
         """Reconstruct from flat parameter tensor.
 
         Args:
@@ -108,6 +108,96 @@ class HillParams:
             k_m=params[1].item(),
             hill_coefficient=params[2].item(),
             species_index=int(params[3].item()),
+        )
+
+
+@dataclass(frozen=True)
+class ConstantRateParams:
+    """Parameters for constant-rate (zero-order) kinetics.
+
+    Attributes:
+        rate: Constant propensity value (independent of state).
+    """
+
+    rate: float
+
+    def to_tensor(self, max_params: int = 4) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [rate, 0, 0, ...].
+
+        Args:
+            max_params: Length of the output tensor.
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.rate
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "ConstantRateParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with rate at index 0.
+
+        Returns:
+            ConstantRateParams instance.
+        """
+        return cls(rate=params[0].item())
+
+
+@dataclass(frozen=True)
+class EnzymeMichaelisMentenParams:
+    """Parameters for enzyme-catalyzed Michaelis-Menten kinetics.
+
+    Attributes:
+        k_cat: Catalytic rate constant.
+        k_m: Michaelis constant.
+        enzyme_index: Index of the enzyme species.
+        substrate_index: Index of the substrate species.
+    """
+
+    k_cat: float
+    k_m: float
+    enzyme_index: int
+    substrate_index: int
+
+    def to_tensor(self, max_params: int = 4) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [k_cat, k_m, enzyme_index, substrate_index].
+
+        Args:
+            max_params: Length of the output tensor (must be >= 4).
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.k_cat
+        t[1] = self.k_m
+        t[2] = self.enzyme_index
+        t[3] = self.substrate_index
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "EnzymeMichaelisMentenParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with layout [k_cat, k_m, enzyme_index, substrate_index].
+
+        Returns:
+            EnzymeMichaelisMentenParams instance.
+        """
+        return cls(
+            k_cat=params[0].item(),
+            k_m=params[1].item(),
+            enzyme_index=int(params[2].item()),
+            substrate_index=int(params[3].item()),
         )
 
 
@@ -134,14 +224,13 @@ class _MassActionClosure:
         return self._params
 
     @property
-    def reactant_stoichiometry(self) -> torch.Tensor:
-        """(n_species,) consumption counts for this reaction.
-
-        Separate from params because reactant stoichiometry is structural
-        information, not a kinetic parameter. Needed for serialization and
-        propensity evaluation, but not part of the learnable parameter set.
-        """
-        return self._reactant_stoichiometry
+    def species_dependencies(self) -> frozenset[int]:
+        """Indices of species that influence this propensity (nonzero reactant order)."""
+        return frozenset(
+            int(i)
+            for i, r in enumerate(self._reactant_stoichiometry.tolist())
+            if r != 0.0
+        )
 
     def __repr__(self) -> str:
         return f"MassAction(k={self._params.rate_constant})"
@@ -165,6 +254,11 @@ class _HillClosure:
         """Inspectable parameter dataclass."""
         return self._params
 
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Index of the species driving this Hill propensity."""
+        return frozenset({self._params.species_index})
+
     def __repr__(self) -> str:
         return (
             f"Hill(v_max={self._params.v_max}, k_m={self._params.k_m}, "
@@ -175,14 +269,58 @@ class _HillClosure:
 class _ConstantRateClosure:
     """Callable constant propensity: a(X,t) = k. For zero-order reactions."""
 
-    def __init__(self, k: float) -> None:
-        self._k = k
+    def __init__(self, params: ConstantRateParams) -> None:
+        self._params = params
 
     def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
-        return torch.tensor(float(self._k))
+        return torch.tensor(self._params.rate)
+
+    @property
+    def params(self) -> ConstantRateParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """No species influence a constant-rate propensity."""
+        return frozenset()
 
     def __repr__(self) -> str:
-        return f"ConstantRate(k={self._k})"
+        return f"ConstantRate(k={self._params.rate})"
+
+
+class _EnzymeMichaelisMentenClosure:
+    """Callable enzyme-catalyzed Michaelis-Menten propensity.
+
+    a(X, t) = k_cat * X_enzyme * X_substrate / (K_m + X_substrate)
+    """
+
+    def __init__(self, params: EnzymeMichaelisMentenParams) -> None:
+        self._params = params
+        self._species_dependencies = frozenset({params.enzyme_index, params.substrate_index})
+
+    def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
+        p = self._params
+        e = state[p.enzyme_index].clamp(min=0.0)
+        s = state[p.substrate_index].clamp(min=0.0)
+        return p.k_cat * e * s / (p.k_m + s + 1e-8)
+
+    @property
+    def params(self) -> EnzymeMichaelisMentenParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Enzyme and substrate both influence this propensity."""
+        return self._species_dependencies
+
+    def __repr__(self) -> str:
+        p = self._params
+        return (
+            f"EnzymeMM(k_cat={p.k_cat}, K_m={p.k_m}, "
+            f"E={p.enzyme_index}, S={p.substrate_index})"
+        )
 
 
 # ── Public factory functions ──────────────────────────────────────────────────
@@ -219,8 +357,6 @@ def hill(
 ) -> PropensityFn:
     """Create a Hill activation propensity: a(X,t) = V * X_s^n / (K^n + X_s^n).
 
-    The returned callable captures all parameters in its closure. It ignores t.
-
     Args:
         v_max: Maximum rate V.
         k_m: Half-saturation constant K.
@@ -241,7 +377,10 @@ def hill(
 
 
 def constant_rate(k: float) -> PropensityFn:
-    """Create a constant propensity: a(X,t) = k. For zero-order (creation) reactions.
+    """Create a constant propensity: a(X,t) = k.
+
+    For zero-order reactions (constitutive production). The propensity is
+    independent of all species and of time.
 
     Args:
         k: Constant rate.
@@ -249,7 +388,40 @@ def constant_rate(k: float) -> PropensityFn:
     Returns:
         Callable (state, t) → scalar propensity.
     """
-    return _ConstantRateClosure(k)
+    return _ConstantRateClosure(ConstantRateParams(rate=k))
+
+
+def enzyme_michaelis_menten(
+    k_cat: float,
+    k_m: float,
+    enzyme_index: int,
+    substrate_index: int,
+) -> PropensityFn:
+    """Create an enzyme-catalyzed Michaelis-Menten propensity.
+
+    a(X, t) = k_cat * X_enzyme * X_substrate / (K_m + X_substrate)
+
+    The enzyme participates catalytically (zero net stoichiometry for the
+    enzyme) but influences the rate. Both enzyme_index and substrate_index
+    are declared as species dependencies.
+
+    Args:
+        k_cat: Catalytic rate constant.
+        k_m: Michaelis constant.
+        enzyme_index: Index of the enzyme species.
+        substrate_index: Index of the substrate species.
+
+    Returns:
+        Callable (state, t) → scalar propensity.
+    """
+    return _EnzymeMichaelisMentenClosure(
+        EnzymeMichaelisMentenParams(
+            k_cat=k_cat,
+            k_m=k_m,
+            enzyme_index=enzyme_index,
+            substrate_index=substrate_index,
+        )
+    )
 
 
 # ── Serialization protocols ───────────────────────────────────────────────────
@@ -263,7 +435,7 @@ class PropensityParams(Protocol):
 
 @runtime_checkable
 class SerializablePropensity(Protocol):
-    """Protocol for propensity callables that expose their parameters.
+    """Protocol for propensity callables that expose their parameters and dependencies.
 
     Callables implementing this protocol can be serialized to and from
     flat tensor representations via crn_to_tensor_repr / tensor_repr_to_crn.
@@ -273,3 +445,6 @@ class SerializablePropensity(Protocol):
 
     @property
     def params(self) -> PropensityParams: ...
+
+    @property
+    def species_dependencies(self) -> frozenset[int]: ...

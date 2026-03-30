@@ -63,7 +63,7 @@ class CRNCollator:
         Returns:
             Dict with keys:
               stoichiometry:        (B, max_rxn, max_species)
-              reactant_matrix:      (B, max_rxn, max_species)
+              dependency_matrix:    (B, max_rxn, max_species)
               propensity_params:    (B, max_rxn, max_params)
               propensity_type_ids:  (B, max_rxn) int
               initial_states:       (B, max_species)
@@ -80,7 +80,7 @@ class CRNCollator:
         B = len(batch)
 
         stoich = torch.zeros(B, max_rxn, max_species)
-        reactants = torch.zeros(B, max_rxn, max_species)
+        deps = torch.zeros(B, max_rxn, max_species)
         prop_params = torch.zeros(B, max_rxn, max_params)
         prop_type_ids = torch.zeros(B, max_rxn, dtype=torch.long)
         init_states = torch.zeros(B, max_species)
@@ -95,7 +95,7 @@ class CRNCollator:
             np_ = item.crn_repr.propensity_params.shape[1]
 
             stoich[i, :nr, :ns] = item.crn_repr.stoichiometry
-            reactants[i, :nr, :ns] = item.crn_repr.reactant_matrix
+            deps[i, :nr, :ns] = item.crn_repr.dependency_matrix
             prop_params[i, :nr, :np_] = item.crn_repr.propensity_params
             prop_type_ids[i, :nr] = item.crn_repr.propensity_type_ids
             init_states[i, :ns] = item.initial_state
@@ -106,7 +106,7 @@ class CRNCollator:
 
         return {
             "stoichiometry": stoich,
-            "reactant_matrix": reactants,
+            "dependency_matrix": deps,
             "propensity_params": prop_params,
             "propensity_type_ids": prop_type_ids,
             "initial_states": init_states,

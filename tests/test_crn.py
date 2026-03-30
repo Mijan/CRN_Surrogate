@@ -21,7 +21,6 @@ from crn_surrogate.crn.examples import (
     toggle_switch,
 )
 from crn_surrogate.crn.propensities import mass_action
-from crn_surrogate.encoder.graph_utils import build_bipartite_edges
 from crn_surrogate.encoder.tensor_repr import (
     crn_to_tensor_repr,
     tensor_repr_to_crn,
@@ -208,7 +207,7 @@ def test_toggle_switch_factory_structure():
 
 def test_simple_mapk_cascade_factory_structure():
     crn = simple_mapk_cascade()
-    assert crn.n_species == 3
+    assert crn.n_species == 7
     assert crn.n_reactions == 6
 
 
@@ -219,24 +218,24 @@ def test_bipartite_edges_birth_death_two_edges():
     """Birth-death: each reaction touches species A, so 2 reaction→species edges."""
     crn = birth_death()
     repr_ = crn_to_tensor_repr(crn)
-    edges = build_bipartite_edges(repr_.stoichiometry, repr_.reactant_matrix)
+    edges = repr_.bipartite_edges
     assert edges.rxn_to_species_index.shape[1] == 2
 
 
-def test_bipartite_edges_feature_dimension_is_two():
-    """Edge features encode (reactant_count, net_change), feature dim == 2."""
+def test_bipartite_edges_feature_dimension_is_three():
+    """Edge features encode (net_change, is_stoichiometric, is_dependency), feature dim == 3."""
     crn = birth_death()
     repr_ = crn_to_tensor_repr(crn)
-    edges = build_bipartite_edges(repr_.stoichiometry, repr_.reactant_matrix)
-    assert edges.rxn_to_species_feat.shape[1] == 2
+    edges = repr_.bipartite_edges
+    assert edges.rxn_to_species_feat.shape[1] == 3
 
 
 def test_bipartite_edges_lotka_volterra_has_more_edges_than_birth_death():
     """Lotka-Volterra has more edges (4) than birth-death (2)."""
     bd_repr = crn_to_tensor_repr(birth_death())
     lv_repr = crn_to_tensor_repr(lotka_volterra())
-    edges_bd = build_bipartite_edges(bd_repr.stoichiometry, bd_repr.reactant_matrix)
-    edges_lv = build_bipartite_edges(lv_repr.stoichiometry, lv_repr.reactant_matrix)
+    edges_bd = bd_repr.bipartite_edges
+    edges_lv = lv_repr.bipartite_edges
     assert edges_bd.rxn_to_species_index.shape[1] == 2
     assert edges_lv.rxn_to_species_index.shape[1] == 4
 
@@ -256,10 +255,10 @@ def test_tensor_repr_round_trip_birth_death_propensity_values():
     torch.testing.assert_close(a_orig, a_recon, atol=1e-5, rtol=1e-5)
 
 
-def test_tensor_repr_round_trip_lotka_volterra():
-    """Round-trip preserves propensity values for a two-species CRN."""
-    original = lotka_volterra(k_prey_birth=1.0, k_predation=0.01, k_predator_death=0.5)
-    state = torch.tensor([30.0, 10.0])
+def test_tensor_repr_round_trip_toggle_switch():
+    """Round-trip preserves propensity values for a two-species Hill + mass-action CRN."""
+    original = toggle_switch(alpha1=5.0, alpha2=3.0, beta=1.0, hill_n=2.0)
+    state = torch.tensor([4.0, 2.0])
 
     reconstructed = tensor_repr_to_crn(crn_to_tensor_repr(original))
     a_orig = original.evaluate_propensities(state)
