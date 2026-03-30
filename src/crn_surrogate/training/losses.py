@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 import torch
+import torch.nn as nn
+
+if TYPE_CHECKING:
+    from crn_surrogate.encoder.bipartite_gnn import CRNContext
+    from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 
 
 class TrajectoryLoss(ABC):
@@ -123,6 +129,96 @@ class VarianceMatchingLoss(TrajectoryLoss):
         if mask is not None:
             diff = diff * mask.float()
         return (diff**2).mean() / scale
+
+
+class GaussianTransitionNLL(nn.Module):
+    """One-step Gaussian negative log-likelihood for SDE training.
+
+    Evaluates the log-likelihood of observed transitions under the
+    Euler-Maruyama Gaussian model, using teacher forcing (each step
+    starts from the true state, not the predicted state).
+
+    The diagonal NLL per transition is:
+        NLL = ½ Σ_s [ (y_{s,t+1} - μ_s)² / σ²_s + log(σ²_s) ]
+    where
+        μ_s = y_s + F_θ[s] · dt
+        σ²_s = ||G_θ[s, :]||² · dt
+    """
+
+    def __init__(self, *, min_variance: float = 1e-6) -> None:
+        """Args:
+        min_variance: Floor for predicted variance to prevent
+            log(0) and division by zero.
+        """
+        super().__init__()
+        self._min_variance = min_variance
+
+    def compute(
+        self,
+        sde: CRNNeuralSDE,
+        crn_context: CRNContext,
+        true_trajectory: torch.Tensor,
+        times: torch.Tensor,
+        dt: float,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute mean NLL over all transitions in the trajectory.
+
+        All M*(T-1) transitions are batched into a single forward pass through
+        the drift and diffusion networks (no Python loop over M or T).
+
+        Args:
+            sde: The neural SDE model (provides drift and diffusion).
+            crn_context: CRN encoder output.
+            true_trajectory: (T, n_species) observed states on a regular
+                time grid. Can also be (M, T, n_species) in which case
+                transitions from ALL M trajectories are used.
+            times: (T,) time points corresponding to the trajectory.
+            dt: Time step between consecutive observations.
+            mask: (n_species,) optional bool mask for valid species.
+
+        Returns:
+            Scalar mean NLL loss.
+
+        Raises:
+            ValueError: If T < 2 (no transitions to evaluate).
+        """
+        if true_trajectory.dim() == 2:
+            true_trajectory = true_trajectory.unsqueeze(0)  # (1, T, n_species)
+
+        M, T, n_species = true_trajectory.shape
+        if T < 2:
+            raise ValueError(
+                f"GaussianTransitionNLL requires T >= 2 time steps, got T={T}"
+            )
+
+        # Reshape all M*(T-1) transitions into a single batch
+        all_y_t = true_trajectory[:, :-1, :].reshape(
+            -1, n_species
+        )  # (M*(T-1), n_species)
+        all_y_next = true_trajectory[:, 1:, :].reshape(
+            -1, n_species
+        )  # (M*(T-1), n_species)
+        all_times = times[:-1].repeat(M)  # (M*(T-1),)
+
+        # Two batched forward passes instead of M*(T-1) individual ones
+        all_drift = sde.drift(all_times, all_y_t, crn_context)  # (M*(T-1), n_species)
+        all_G = sde.diffusion(
+            all_times, all_y_t, crn_context
+        )  # (M*(T-1), n_species, n_noise)
+
+        mu = all_y_t + all_drift * dt  # (M*(T-1), n_species)
+        variance = (all_G**2).sum(dim=-1) * dt  # (M*(T-1), n_species)
+        variance = variance.clamp(min=self._min_variance)
+
+        residual = all_y_next - mu  # (M*(T-1), n_species)
+        nll = 0.5 * (residual**2 / variance + variance.log())  # (M*(T-1), n_species)
+
+        if mask is not None:
+            nll = nll * mask.float()
+
+        n_dims = int(mask.sum().item()) if mask is not None else n_species
+        return nll.sum() / (M * (T - 1) * n_dims)
 
 
 class CombinedTrajectoryLoss(TrajectoryLoss):

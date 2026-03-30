@@ -268,6 +268,29 @@ They must live in config dataclasses, not in the constructor body.
   Output-only conditioning limits the network to learning context-independent
   intermediate features, which is unnecessarily restrictive.
 
+### Train sequential models on one-step objectives first
+
+When training a model that generates sequences (trajectories, time series,
+autoregressive outputs), prefer a one-step prediction loss with teacher
+forcing as the primary training objective. Full-rollout losses (comparing
+entire generated sequences against ground truth) should be used for
+validation and optional fine-tuning, not as the primary training signal.
+
+- Full rollout compounds early errors. By step T, the model operates on
+  states far from the training distribution, producing noisy, uninformative
+  gradients.
+- Teacher forcing (always predicting from the true previous state) keeps
+  every training step on-distribution and provides clean gradients.
+- When a probabilistic model defines a tractable per-step likelihood (e.g.,
+  Gaussian transitions in an Euler-Maruyama SDE), use the negative
+  log-likelihood as the loss. This jointly trains mean and variance from a
+  single principled objective, eliminating arbitrary loss-weighting
+  hyperparameters.
+- To bridge the gap between teacher-forced training and free-running
+  inference, use scheduled sampling: start with 100% teacher forcing, then
+  gradually increase the fraction of steps that use the model's own
+  predictions.
+
 ---
 
 ## Documentation
@@ -316,6 +339,13 @@ They must live in config dataclasses, not in the constructor body.
 - Use `torch.no_grad()` explicitly for inference and evaluation.
 - Prefer `torch.nn.functional` for stateless operations; use `nn.Module`
   wrappers for stateful ones (layers with parameters).
+- **Never loop over a batch dimension in Python.** If a computation applies
+  the same operation to N independent items (N transitions, N samples, N
+  trajectories), reshape them into a single batch tensor and run one forward
+  pass. Python loops over individual vectors launch thousands of tiny GPU
+  kernels; a single batched operation launches one. The speedup is typically
+  10-100x. If a function needs to support both single-item and batched input,
+  handle it via `dim()` checks at the entry point, not by looping internally.
 
 ---
 

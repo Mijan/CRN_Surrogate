@@ -11,6 +11,14 @@ class SchedulerType(Enum):
     REDUCE_ON_PLATEAU = "reduce_on_plateau"
 
 
+class TrainingMode(Enum):
+    """Training strategy for the neural SDE."""
+
+    TEACHER_FORCING = "teacher_forcing"
+    FULL_ROLLOUT = "full_rollout"
+    SCHEDULED_SAMPLING = "scheduled_sampling"
+
+
 @dataclass(frozen=True)
 class TrainingConfig:
     """Training hyperparameters."""
@@ -27,6 +35,9 @@ class TrainingConfig:
     checkpoint_dir: str = "checkpoints"
     log_dir: str = "logs"
     scheduler_type: SchedulerType = SchedulerType.REDUCE_ON_PLATEAU
+    training_mode: TrainingMode = TrainingMode.TEACHER_FORCING
+    scheduled_sampling_start_epoch: int = 50
+    scheduled_sampling_end_epoch: int = 150
     # Weights & Biases integration (requires `pip install wandb`)
     use_wandb: bool = False
     wandb_project: str = "crn-surrogate"
@@ -37,5 +48,5 @@ class TrainingConfig:
             f"TrainingConfig(lr={self.lr}, max_epochs={self.max_epochs}, "
             f"batch_size={self.batch_size}, dt={self.dt}, "
             f"n_ssa_samples={self.n_ssa_samples}, scheduler={self.scheduler_type.value}, "
-            f"use_wandb={self.use_wandb})"
+            f"training_mode={self.training_mode.value}, use_wandb={self.use_wandb})"
         )

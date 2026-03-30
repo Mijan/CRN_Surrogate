@@ -12,13 +12,21 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from crn_surrogate.configs.model_config import ModelConfig
-from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
+from crn_surrogate.configs.training_config import (
+    SchedulerType,
+    TrainingConfig,
+    TrainingMode,
+)
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
-from crn_surrogate.training.losses import CombinedTrajectoryLoss, TrajectoryLoss
+from crn_surrogate.training.losses import (
+    CombinedTrajectoryLoss,
+    GaussianTransitionNLL,
+    TrajectoryLoss,
+)
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
 
 
@@ -28,12 +36,14 @@ class TrainingResult:
 
     Attributes:
         train_losses: Per-epoch mean training loss.
-        val_losses: Validation losses recorded every val_every epochs.
+        val_losses: Validation rollout losses recorded every val_every epochs.
+        val_nll_losses: Validation NLL losses recorded every val_every epochs.
         val_epochs: Epoch indices corresponding to val_losses (1-indexed).
     """
 
     train_losses: list[float] = field(default_factory=list)
     val_losses: list[float] = field(default_factory=list)
+    val_nll_losses: list[float] = field(default_factory=list)
     val_epochs: list[int] = field(default_factory=list)
 
 
@@ -58,13 +68,17 @@ class Trainer:
         sde: The neural SDE.
         model_config: Model hyperparameters.
         train_config: Training hyperparameters.
-        loss_fn: Loss function to use. Defaults to CombinedTrajectoryLoss.
+        loss_fn: Rollout loss function. Defaults to CombinedTrajectoryLoss.
+            Only used when training_mode is FULL_ROLLOUT or SCHEDULED_SAMPLING.
         """
         self._encoder = encoder
         self._sde = sde
         self._model_config = model_config
         self._train_config = train_config
-        self._loss_fn = loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
+        self._nll_loss = GaussianTransitionNLL()
+        self._rollout_loss = (
+            loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
+        )
         self._solver = EulerMaruyamaSolver(model_config.sde)
 
         params = list(encoder.parameters()) + list(sde.parameters())
@@ -117,16 +131,21 @@ class Trainer:
 
         for epoch in range(1, self._train_config.max_epochs + 1):
             self._timer = PhaseTimer(device=self._timer.device)
-            train_loss = self._train_epoch(train_loader)
+            train_loss = self._train_epoch(train_loader, epoch)
             result.train_losses.append(train_loss)
 
             val_loss: float | None = None
+            val_nll: float | None = None
             if val_dataset is not None and epoch % self._train_config.val_every == 0:
-                val_loss = self._validate(val_dataset)
+                val_loss, val_nll = self._validate(val_dataset)
                 result.val_losses.append(val_loss)
+                result.val_nll_losses.append(val_nll)
                 result.val_epochs.append(epoch)
                 self._maybe_checkpoint(val_loss, epoch)
-                print(f"Epoch {epoch:4d} | train={train_loss:.4f} | val={val_loss:.4f}")
+                print(
+                    f"Epoch {epoch:4d} | train={train_loss:.4f} | "
+                    f"val={val_loss:.4f} | val_nll={val_nll:.4f}"
+                )
             else:
                 print(f"Epoch {epoch:4d} | train={train_loss:.4f}")
 
@@ -135,6 +154,8 @@ class Trainer:
                 metrics: dict = {"epoch": epoch, "train_loss": train_loss}
                 if val_loss is not None:
                     metrics["val_loss"] = val_loss
+                if val_nll is not None:
+                    metrics["val_nll"] = val_nll
                 self._wandb.log_epoch(metrics)
                 self._wandb.log_phase_timings(self._timer)
 
@@ -145,7 +166,7 @@ class Trainer:
 
         return result
 
-    def _train_epoch(self, loader: DataLoader) -> float:
+    def _train_epoch(self, loader: DataLoader, epoch: int) -> float:
         """Run one training epoch and return mean loss."""
         self._encoder.train()
         self._sde.train()
@@ -156,7 +177,7 @@ class Trainer:
             self._timer.start_batch(n_batches=n_batches)
 
             with self._timer.time("forward"):
-                loss = self._compute_batch_loss(batch)
+                loss = self._compute_batch_loss(batch, epoch)
 
             self._optimizer.zero_grad()
             with self._timer.time("backward"):
@@ -173,24 +194,35 @@ class Trainer:
 
         return total_loss / max(n_batches, 1)
 
-    def _compute_batch_loss(self, batch: dict) -> torch.Tensor:
+    def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
         """Compute mean loss over all items in the batch."""
         B = batch["stoichiometry"].shape[0]
         total = torch.zeros(1, device=batch["stoichiometry"].device)
         for idx in range(B):
-            total = total + self._compute_item_loss(batch, idx)
+            total = total + self._compute_item_loss(batch, idx, epoch)
         return total / B
 
-    def _compute_item_loss(self, batch: dict, idx: int) -> torch.Tensor:
-        """Compute loss for a single item in the batch."""
+    def _compute_item_loss(self, batch: dict, idx: int, epoch: int = 1) -> torch.Tensor:
+        """Compute loss for a single item in the batch, dispatching on training mode."""
         crn_repr = self._reconstruct_tensor_repr(batch, idx)
         n_species = crn_repr.n_species
         init_state = batch["initial_states"][idx, :n_species]
-        # (M, T, n_species) — full set of SSA ground-truth trajectories
-        true_trajs = batch["trajectories"][idx, :, :, :n_species]
+        true_trajs = batch["trajectories"][idx, :, :, :n_species]  # (M, T, n_species)
         times = batch["times"][idx]
+        species_mask = batch["species_mask"][idx, :n_species]
 
         ctx = self._encoder(crn_repr, init_state)
+        mode = self._effective_mode(epoch)
+
+        if mode == TrainingMode.TEACHER_FORCING:
+            return self._nll_loss.compute(
+                sde=self._sde,
+                crn_context=ctx,
+                true_trajectory=true_trajs,
+                times=times,
+                dt=self._train_config.dt,
+                mask=species_mask,
+            )
 
         k = self._train_config.n_sde_samples
         pred_samples = [
@@ -200,9 +232,26 @@ class Trainer:
             for _ in range(k)
         ]
         pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species)
+        return self._rollout_loss.compute(pred_states, true_trajs, mask=species_mask)
 
-        species_mask = batch["species_mask"][idx, :n_species]
-        return self._loss_fn.compute(pred_states, true_trajs, mask=species_mask)
+    def _effective_mode(self, epoch: int) -> TrainingMode:
+        """Determine effective training mode for this epoch."""
+        cfg = self._train_config
+        if cfg.training_mode == TrainingMode.TEACHER_FORCING:
+            return TrainingMode.TEACHER_FORCING
+        if cfg.training_mode == TrainingMode.FULL_ROLLOUT:
+            return TrainingMode.FULL_ROLLOUT
+        # Scheduled sampling: teacher forcing early, rollout later
+        if epoch < cfg.scheduled_sampling_start_epoch:
+            return TrainingMode.TEACHER_FORCING
+        if epoch >= cfg.scheduled_sampling_end_epoch:
+            return TrainingMode.FULL_ROLLOUT
+        progress = (epoch - cfg.scheduled_sampling_start_epoch) / (
+            cfg.scheduled_sampling_end_epoch - cfg.scheduled_sampling_start_epoch
+        )
+        if torch.rand(1).item() < progress:
+            return TrainingMode.FULL_ROLLOUT
+        return TrainingMode.TEACHER_FORCING
 
     def _reconstruct_tensor_repr(self, batch: dict, idx: int) -> CRNTensorRepr:
         """Reconstruct a CRNTensorRepr from a padded batch dict for item idx."""
@@ -216,8 +265,16 @@ class Trainer:
             propensity_params=batch["propensity_params"][idx, :n_reactions],
         )
 
-    def _validate(self, val_dataset: CRNTrajectoryDataset) -> float:
-        """Compute mean validation loss over the full validation dataset."""
+    def _validate(self, val_dataset: CRNTrajectoryDataset) -> tuple[float, float]:
+        """Compute validation losses over the full validation dataset.
+
+        Always uses full rollout for the trajectory loss regardless of
+        training_mode, because the goal of validation is to assess
+        long-horizon trajectory quality.
+
+        Returns:
+            Tuple of (rollout_loss, nll_loss).
+        """
         self._encoder.eval()
         self._sde.eval()
         collator = CRNCollator()
@@ -227,13 +284,63 @@ class Trainer:
             shuffle=False,
             collate_fn=collator,
         )
-        total_loss = 0.0
+        total_rollout = 0.0
+        total_nll = 0.0
         n_batches = 0
         with torch.no_grad():
             for batch in loader:
-                total_loss += self._compute_batch_loss(batch).item()
+                total_rollout += self._compute_batch_rollout_loss(batch).item()
+                total_nll += self._compute_batch_nll(batch).item()
                 n_batches += 1
-        return total_loss / max(n_batches, 1)
+        denom = max(n_batches, 1)
+        return total_rollout / denom, total_nll / denom
+
+    def _compute_batch_rollout_loss(self, batch: dict) -> torch.Tensor:
+        """Compute mean rollout loss over all items in the batch (always full rollout)."""
+        B = batch["stoichiometry"].shape[0]
+        total = torch.zeros(1, device=batch["stoichiometry"].device)
+        for idx in range(B):
+            crn_repr = self._reconstruct_tensor_repr(batch, idx)
+            n_species = crn_repr.n_species
+            init_state = batch["initial_states"][idx, :n_species]
+            true_trajs = batch["trajectories"][idx, :, :, :n_species]
+            times = batch["times"][idx]
+            species_mask = batch["species_mask"][idx, :n_species]
+            ctx = self._encoder(crn_repr, init_state)
+            k = self._train_config.n_sde_samples
+            pred_samples = [
+                self._solver.solve(
+                    self._sde, init_state, ctx, times, self._train_config.dt
+                ).states
+                for _ in range(k)
+            ]
+            pred_states = torch.stack(pred_samples, dim=0)
+            total = total + self._rollout_loss.compute(
+                pred_states, true_trajs, mask=species_mask
+            )
+        return total / B
+
+    def _compute_batch_nll(self, batch: dict) -> torch.Tensor:
+        """Compute mean NLL loss over all items in the batch (teacher forcing)."""
+        B = batch["stoichiometry"].shape[0]
+        total = torch.zeros(1, device=batch["stoichiometry"].device)
+        for idx in range(B):
+            crn_repr = self._reconstruct_tensor_repr(batch, idx)
+            n_species = crn_repr.n_species
+            init_state = batch["initial_states"][idx, :n_species]
+            true_trajs = batch["trajectories"][idx, :, :, :n_species]
+            times = batch["times"][idx]
+            species_mask = batch["species_mask"][idx, :n_species]
+            ctx = self._encoder(crn_repr, init_state)
+            total = total + self._nll_loss.compute(
+                sde=self._sde,
+                crn_context=ctx,
+                true_trajectory=true_trajs,
+                times=times,
+                dt=self._train_config.dt,
+                mask=species_mask,
+            )
+        return total / B
 
     def _build_scheduler(
         self,
