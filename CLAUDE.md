@@ -250,6 +250,24 @@ files agree on the value today.
 - If adding a new channel to a feature vector requires changing more than two
   locations (the enum + the builder function), the abstraction is leaking.
 
+### Network architecture details must be configurable, not hardcoded
+
+The number of layers, hidden dimensions, activation functions, and
+conditioning strategies in neural network components are hyperparameters.
+They must live in config dataclasses, not in the constructor body.
+
+- Never hardcode the number of hidden layers by writing out a fixed
+  sequence of `nn.Linear` / activation pairs. Use a loop over a
+  `n_hidden_layers` config value and store layers in `nn.ModuleList`.
+- If a reusable pattern emerges (e.g., "MLP with conditioning at every
+  layer"), extract it into its own `nn.Module` class with a clean
+  constructor signature. Both the drift and diffusion networks should be
+  instances of that class, not copy-pasted `nn.Sequential` blocks.
+- Conditioning (FiLM, concatenation, cross-attention) should be applied at
+  every hidden layer of a conditioned network, not only at the output.
+  Output-only conditioning limits the network to learning context-independent
+  intermediate features, which is unnecessarily restrictive.
+
 ---
 
 ## Documentation

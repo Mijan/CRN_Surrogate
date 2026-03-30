@@ -22,7 +22,7 @@ BipartiteGNNEncoder                                                             
     CRNContext  (species_embeddings, reaction_embeddings, context_vector)         │
         │                                                                         │
         ▼                                                                         │
-CRNNeuralSDE  (FiLM-conditioned drift f and diffusion g)                         │
+CRNNeuralSDE  (drift f and diffusion g, each a ConditionedMLP)                   │
   dX = f(X,t; ctx) dt + g(X,t; ctx) dW                                          │
         │                                                                         │
         ▼                                                                         │
@@ -39,7 +39,7 @@ EulerMaruyamaSolver  →  predicted Trajectory                                  
 - The encoder is CRN-agnostic at the tensor level. The symbolic-to-tensor conversion (`crn_to_tensor_repr`) is an explicit boundary; the encoder never imports the `CRN` class.
 - Edge features encode stoichiometric structure: `NET_CHANGE`, `IS_STOICHIOMETRIC`, `IS_DEPENDENCY`. The `IS_DEPENDENCY` flag distinguishes catalytic species (zero net stoichiometry but non-zero propensity influence) from stoichiometric participants.
 - The diffusion matrix has shape `(n_species, n_reactions)`, matching the Chemical Langevin Equation where each reaction drives one independent Wiener process.
-- FiLM modulation conditions both drift and diffusion networks on the same `context_vector = [mean-pooled species || mean-pooled reactions]`.
+- Both drift and diffusion networks are `ConditionedMLP` instances: FiLM modulation is applied at every hidden layer (not just the output), so the network can compute context-dependent intermediate features. Depth is controlled by `SDEConfig.n_hidden_layers`.
 
 ## Install
 
@@ -69,7 +69,7 @@ crn_repr = crn_to_tensor_repr(crn)
 
 model_config = ModelConfig(
     encoder=EncoderConfig(d_model=32, n_layers=2),
-    sde=SDEConfig.from_crn(crn),        # n_noise_channels = n_reactions
+    sde=SDEConfig.from_crn(crn),        # n_noise_channels = n_reactions, n_hidden_layers = 2
 )
 encoder = BipartiteGNNEncoder(model_config.encoder)
 sde = CRNNeuralSDE(model_config.sde, n_species=crn.n_species)
@@ -155,13 +155,21 @@ The `Trainer` automatically records per-batch phase timings using `PhaseTimer` a
 | `False` (default) | `SumMessagePassingLayer` | Sum over incoming messages |
 | `True` | `AttentiveMessagePassingLayer` | Attention-weighted sum (query/key projections, scatter softmax) |
 
+## SDE network depth
+
+`SDEConfig.n_hidden_layers` (default 2) controls the depth of both the drift and diffusion `ConditionedMLP` networks. Each hidden layer is followed by a FiLM conditioning step, so increasing `n_hidden_layers` adds more context-aware computation without any code changes:
+
+```python
+SDEConfig.from_crn(crn, n_hidden_layers=4)  # deeper networks, FiLM at every hidden layer
+```
+
 ## Run tests
 
 ```bash
 pytest
 ```
 
-Test suite covers: CRN construction and propensities, Gillespie SSA simulator, bipartite graph utilities, all encoder components (embeddings, message-passing layers, full encoder), loss functions, dataset collation, trainer, profiler, and an end-to-end integration test.
+Test suite covers: CRN construction and propensities, Gillespie SSA simulator, bipartite graph utilities, all encoder components (embeddings, message-passing layers, full encoder), `FiLMLayer`, `ConditionedMLP`, neural SDE (drift/diffusion shapes, non-negativity, gradient flow), configs, loss functions, dataset collation, trainer, profiler, and an end-to-end integration test.
 
 ## Project structure
 
@@ -186,7 +194,9 @@ src/crn_surrogate/
 │   ├── message_passing.py    # SumMessagePassingLayer, AttentiveMessagePassingLayer
 │   └── bipartite_gnn.py      # BipartiteGNNEncoder, CRNContext
 ├── simulator/
-│   ├── neural_sde.py         # CRNNeuralSDE, FiLMLayer
+│   ├── film.py               # FiLMLayer (feature-wise linear modulation)
+│   ├── conditioned_mlp.py    # ConditionedMLP (MLP with per-layer FiLM conditioning)
+│   ├── neural_sde.py         # CRNNeuralSDE
 │   └── sde_solver.py         # EulerMaruyamaSolver
 ├── data/
 │   └── dataset.py            # TrajectoryItem, CRNTrajectoryDataset, CRNCollator

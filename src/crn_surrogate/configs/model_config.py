@@ -57,12 +57,26 @@ class SDEConfig:
 
     Use SDEConfig.from_crn(crn) to automatically set n_noise_channels = n_reactions,
     which matches the Chemical Langevin Equation structure (one Wiener process per reaction).
+
+    Attributes:
+        d_model: Hidden dimension for conditioning context.
+        d_hidden: Hidden dimension inside the drift/diffusion ConditionedMLPs.
+        n_noise_channels: Number of independent noise channels (Wiener processes).
+        n_hidden_layers: Number of FiLM-conditioned hidden layers in each network.
+        clip_state: Whether to clamp state to [0, ∞) after each Euler-Maruyama step.
     """
 
     d_model: int = 64
     d_hidden: int = 128
-    n_noise_channels: int = 16  # override with from_crn() for CLE-correct noise dim
+    n_noise_channels: int = 8  # override with from_crn() for CLE-correct noise dim
+    n_hidden_layers: int = 2
     clip_state: bool = True  # clamp X >= 0 after each Euler-Maruyama step
+
+    def __post_init__(self) -> None:
+        if self.n_hidden_layers < 1:
+            raise ValueError(
+                f"n_hidden_layers must be >= 1, got {self.n_hidden_layers}"
+            )
 
     @classmethod
     def from_crn(
@@ -70,6 +84,7 @@ class SDEConfig:
         crn: "CRN",
         d_model: int = 64,
         d_hidden: int = 128,
+        n_hidden_layers: int = 2,
         clip_state: bool = True,
     ) -> "SDEConfig":
         """Create SDEConfig with n_noise_channels = crn.n_reactions.
@@ -80,7 +95,8 @@ class SDEConfig:
         Args:
             crn: CRN definition whose n_reactions sets n_noise_channels.
             d_model: Hidden dimension for conditioning.
-            d_hidden: Hidden dimension inside the drift/diffusion MLPs.
+            d_hidden: Hidden dimension inside the drift/diffusion ConditionedMLPs.
+            n_hidden_layers: Number of FiLM-conditioned hidden layers per network.
             clip_state: Whether to clamp state to [0, ∞) after each step.
 
         Returns:
@@ -90,13 +106,15 @@ class SDEConfig:
             d_model=d_model,
             d_hidden=d_hidden,
             n_noise_channels=crn.n_reactions,
+            n_hidden_layers=n_hidden_layers,
             clip_state=clip_state,
         )
 
     def __repr__(self) -> str:
         return (
             f"SDEConfig(d_model={self.d_model}, d_hidden={self.d_hidden}, "
-            f"n_noise_channels={self.n_noise_channels}, clip_state={self.clip_state})"
+            f"n_noise_channels={self.n_noise_channels}, "
+            f"n_hidden_layers={self.n_hidden_layers}, clip_state={self.clip_state})"
         )
 
 

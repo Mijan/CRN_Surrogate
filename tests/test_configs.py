@@ -5,6 +5,7 @@ Covers:
 - An explicit type_embed_dim is preserved unchanged.
 - EncoderConfig raises ValueError when type_embed_dim >= d_model.
 - SDEConfig.from_crn() sets n_noise_channels = crn.n_reactions.
+- SDEConfig.from_crn() forwards n_hidden_layers.
 """
 
 import pytest
@@ -74,10 +75,11 @@ def test_sde_config_from_crn_matches_crn_n_reactions():
 
 
 def test_sde_config_from_crn_forwards_other_kwargs():
-    """from_crn passes d_model, d_hidden, and clip_state through correctly."""
+    """from_crn passes d_model, d_hidden, n_hidden_layers, and clip_state through correctly."""
     config = SDEConfig.from_crn(
-        birth_death(), d_model=32, d_hidden=64, clip_state=False
+        birth_death(), d_model=32, d_hidden=64, n_hidden_layers=3, clip_state=False
     )
     assert config.d_model == 32
     assert config.d_hidden == 64
+    assert config.n_hidden_layers == 3
     assert config.clip_state is False

@@ -1,40 +1,14 @@
+"""Neural SDE whose drift and diffusion are conditioned on CRN embeddings."""
+
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
-
-
-class FiLMLayer(nn.Module):
-    """Feature-wise Linear Modulation conditioning layer.
-
-    Applies: output = gamma(context) * x + beta(context)
-    """
-
-    def __init__(self, d_context: int, d_features: int) -> None:
-        """Args:
-        d_context: Dimension of the conditioning context vector.
-        d_features: Dimension of the features to modulate.
-        """
-        super().__init__()
-        self._gamma = nn.Linear(d_context, d_features)
-        self._beta = nn.Linear(d_context, d_features)
-
-    def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
-        """Apply FiLM conditioning.
-
-        Args:
-            x: (..., d_features) features to modulate.
-            context: (d_context,) or (B, d_context) context vector.
-
-        Returns:
-            Modulated features, same shape as x.
-        """
-        gamma = self._gamma(context)
-        beta = self._beta(context)
-        return gamma * x + beta
+from crn_surrogate.simulator.conditioned_mlp import ConditionedMLP
 
 
 class CRNNeuralSDE(nn.Module):
@@ -42,8 +16,8 @@ class CRNNeuralSDE(nn.Module):
 
     Mirrors the Chemical Langevin Equation structure:
       dX = f(X, t; ctx) dt + g(X, t; ctx) dW
-    where f and g are learned MLPs conditioned on the CRN encoder output
-    via FiLM modulation.
+    where f and g are ConditionedMLPs that apply FiLM modulation at every
+    hidden layer using the CRN encoder output as context.
     """
 
     def __init__(self, config: SDEConfig, n_species: int) -> None:
@@ -56,25 +30,20 @@ class CRNNeuralSDE(nn.Module):
         self._n_species = n_species
         d_context = 2 * config.d_model  # species + reaction pool concatenated
 
-        # Drift network
-        self._drift_mlp = nn.Sequential(
-            nn.Linear(n_species, config.d_hidden),
-            nn.SiLU(),
-            nn.Linear(config.d_hidden, config.d_hidden),
-            nn.SiLU(),
-            nn.Linear(config.d_hidden, n_species),
+        self._drift_net = ConditionedMLP(
+            d_in=n_species,
+            d_hidden=config.d_hidden,
+            d_out=n_species,
+            d_context=d_context,
+            n_hidden_layers=config.n_hidden_layers,
         )
-        self._drift_film = FiLMLayer(d_context, n_species)
-
-        # Diffusion network
-        self._diff_mlp = nn.Sequential(
-            nn.Linear(n_species, config.d_hidden),
-            nn.SiLU(),
-            nn.Linear(config.d_hidden, config.d_hidden),
-            nn.SiLU(),
-            nn.Linear(config.d_hidden, n_species * config.n_noise_channels),
+        self._diff_net = ConditionedMLP(
+            d_in=n_species,
+            d_hidden=config.d_hidden,
+            d_out=n_species * config.n_noise_channels,
+            d_context=d_context,
+            n_hidden_layers=config.n_hidden_layers,
         )
-        self._diff_film = FiLMLayer(d_context, n_species * config.n_noise_channels)
 
     def drift(
         self,
@@ -92,8 +61,11 @@ class CRNNeuralSDE(nn.Module):
         Returns:
             (n_species,) or (B, n_species) drift vector.
         """
-        h = self._drift_mlp(state)
-        return self._drift_film(h, crn_context.context_vector)
+        # NOTE: t is accepted in the signature for interface compatibility with
+        # time-varying SDEs (e.g., optogenetic input protocols) but is currently
+        # unused. To add time dependence, concatenate a time embedding to the
+        # state input or add it to the context vector.
+        return self._drift_net(state, crn_context.context_vector)
 
     def diffusion(
         self,
@@ -112,9 +84,10 @@ class CRNNeuralSDE(nn.Module):
             (n_species, n_noise_channels) or (B, n_species, n_noise_channels),
             non-negative (softplus applied).
         """
-        raw = self._diff_mlp(state)
-        raw = self._diff_film(raw, crn_context.context_vector)
-        raw = nn.functional.softplus(raw)
+        # NOTE: t is accepted in the signature for interface compatibility with
+        # time-varying SDEs but is currently unused.
+        raw = self._diff_net(state, crn_context.context_vector)
+        raw = F.softplus(raw)
         n_noise = self._config.n_noise_channels
         if state.dim() == 1:
             return raw.view(self._n_species, n_noise)
