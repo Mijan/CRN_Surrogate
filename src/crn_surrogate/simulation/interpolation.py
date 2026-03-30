@@ -1,4 +1,5 @@
 """Zero-order hold interpolation for SSA event trajectories onto regular grids."""
+
 from __future__ import annotations
 
 import torch

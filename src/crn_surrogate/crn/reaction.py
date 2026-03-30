@@ -1,11 +1,11 @@
 """Atomic unit of a Chemical Reaction Network: stoichiometry paired with a propensity callable."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
 
 import torch
-
 
 PropensityFn = Callable[[torch.Tensor, float], torch.Tensor]
 """Type alias for a propensity function: (state: Tensor(n_species,), t: float) → Tensor(scalar)."""

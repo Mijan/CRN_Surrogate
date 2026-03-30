@@ -1,4 +1,5 @@
 """Bipartite GNN encoder that maps a CRNTensorRepr to contextualized embeddings."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

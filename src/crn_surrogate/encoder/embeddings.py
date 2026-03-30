@@ -34,8 +34,10 @@ class SpeciesEmbedding(nn.Module):
         """
         n_species = initial_concentration.shape[-1]
         indices = torch.arange(n_species, device=initial_concentration.device)
-        conc_emb = self._conc_proj(initial_concentration.unsqueeze(-1))  # (n_species, d_model)
-        id_emb = self._identity_embed(indices)                            # (n_species, d_model)
+        conc_emb = self._conc_proj(
+            initial_concentration.unsqueeze(-1)
+        )  # (n_species, d_model)
+        id_emb = self._identity_embed(indices)  # (n_species, d_model)
         return conc_emb + id_emb
 
 
@@ -73,7 +75,7 @@ class ReactionEmbedding(nn.Module):
         Returns:
             (n_reactions, d_model) embeddings.
         """
-        type_emb = self._type_embed(propensity_type_ids)   # (n_reactions, type_dim)
-        param_emb = self._param_proj(propensity_params)     # (n_reactions, param_dim)
+        type_emb = self._type_embed(propensity_type_ids)  # (n_reactions, type_dim)
+        param_emb = self._param_proj(propensity_params)  # (n_reactions, param_dim)
         combined = torch.cat([type_emb, param_emb], dim=-1)  # (n_reactions, d_model)
         return self._out_proj(combined)

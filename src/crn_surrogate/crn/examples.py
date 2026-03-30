@@ -3,12 +3,18 @@
 Each function returns a fully constructed CRN object with descriptive parameter
 names and documented biological/mathematical interpretation.
 """
+
 from __future__ import annotations
 
 import torch
 
 from crn_surrogate.crn.crn import CRN
-from crn_surrogate.crn.propensities import constant_rate, enzyme_michaelis_menten, hill, mass_action
+from crn_surrogate.crn.propensities import (
+    constant_rate,
+    enzyme_michaelis_menten,
+    hill,
+    mass_action,
+)
 from crn_surrogate.crn.reaction import Reaction
 
 
@@ -253,39 +259,59 @@ def simple_mapk_cascade(
             # MAPKKK → MAPKKK*: basal first-order activation
             Reaction(
                 stoichiometry=torch.tensor([-1, 1, 0, 0, 0, 0, 0]),
-                propensity=mass_action(k_cat_kkk, torch.tensor([1.0, 0, 0, 0, 0, 0, 0])),
+                propensity=mass_action(
+                    k_cat_kkk, torch.tensor([1.0, 0, 0, 0, 0, 0, 0])
+                ),
                 name="MAPKKK activation",
             ),
             # MAPKKK* → MAPKKK: phosphatase deactivation (enzyme=Phosphatase idx=6, substrate=MAPKKK* idx=1)
             Reaction(
                 stoichiometry=torch.tensor([1, -1, 0, 0, 0, 0, 0]),
-                propensity=enzyme_michaelis_menten(k_cat_phos_kkk, k_m_phos, enzyme_index=6, substrate_index=1),
+                propensity=enzyme_michaelis_menten(
+                    k_cat_phos_kkk, k_m_phos, enzyme_index=6, substrate_index=1
+                ),
                 name="MAPKKK* deactivation",
             ),
             # MAPKK → MAPKK*: MAPKKK* activates (enzyme=MAPKKK* idx=1, substrate=MAPKK idx=2)
             Reaction(
                 stoichiometry=torch.tensor([0, 0, -1, 1, 0, 0, 0]),
-                propensity=enzyme_michaelis_menten(k_cat_kk, k_m, enzyme_index=1, substrate_index=2),
+                propensity=enzyme_michaelis_menten(
+                    k_cat_kk, k_m, enzyme_index=1, substrate_index=2
+                ),
                 name="MAPKK activation",
             ),
             # MAPKK* → MAPKK: phosphatase deactivation (enzyme=Phosphatase idx=6, substrate=MAPKK* idx=3)
             Reaction(
                 stoichiometry=torch.tensor([0, 0, 1, -1, 0, 0, 0]),
-                propensity=enzyme_michaelis_menten(k_cat_phos_kk, k_m_phos, enzyme_index=6, substrate_index=3),
+                propensity=enzyme_michaelis_menten(
+                    k_cat_phos_kk, k_m_phos, enzyme_index=6, substrate_index=3
+                ),
                 name="MAPKK* deactivation",
             ),
             # MAPK → MAPK*: MAPKK* activates (enzyme=MAPKK* idx=3, substrate=MAPK idx=4)
             Reaction(
                 stoichiometry=torch.tensor([0, 0, 0, 0, -1, 1, 0]),
-                propensity=enzyme_michaelis_menten(k_cat_k, k_m, enzyme_index=3, substrate_index=4),
+                propensity=enzyme_michaelis_menten(
+                    k_cat_k, k_m, enzyme_index=3, substrate_index=4
+                ),
                 name="MAPK activation",
             ),
             # MAPK* → MAPK: phosphatase deactivation (enzyme=Phosphatase idx=6, substrate=MAPK* idx=5)
             Reaction(
                 stoichiometry=torch.tensor([0, 0, 0, 0, 1, -1, 0]),
-                propensity=enzyme_michaelis_menten(k_cat_phos_k, k_m_phos, enzyme_index=6, substrate_index=5),
+                propensity=enzyme_michaelis_menten(
+                    k_cat_phos_k, k_m_phos, enzyme_index=6, substrate_index=5
+                ),
                 name="MAPK* deactivation",
             ),
         ],
-        species_names=["MAPKKK", "MAPKKK*", "MAPKK", "MAPKK*", "MAPK", "MAPK*", "Phosphatase"],
+        species_names=[
+            "MAPKKK",
+            "MAPKKK*",
+            "MAPKK",
+            "MAPKK*",
+            "MAPK",
+            "MAPK*",
+            "Phosphatase",
+        ],
     )

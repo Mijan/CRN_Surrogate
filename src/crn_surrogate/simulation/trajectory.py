@@ -1,4 +1,5 @@
 """Trajectory dataclass for simulated time-series data."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

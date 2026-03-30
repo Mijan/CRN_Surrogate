@@ -20,7 +20,6 @@ from crn_surrogate.crn.examples import (
     simple_mapk_cascade,
     toggle_switch,
 )
-from crn_surrogate.crn.propensities import mass_action
 from crn_surrogate.encoder.tensor_repr import (
     crn_to_tensor_repr,
     tensor_repr_to_crn,
@@ -50,7 +49,9 @@ def test_reaction_requires_callable_propensity():
 def test_reaction_stores_name_and_stoichiometry():
     """Reaction stores name and stoichiometry exactly as provided."""
     stoich = torch.tensor([1, -1])
-    rxn = Reaction(stoichiometry=stoich, propensity=lambda s, t: torch.tensor(1.0), name="test")
+    rxn = Reaction(
+        stoichiometry=stoich, propensity=lambda s, t: torch.tensor(1.0), name="test"
+    )
     assert rxn.name == "test"
     assert torch.equal(rxn.stoichiometry, stoich)
 
@@ -98,7 +99,9 @@ def test_crn_rejects_wrong_species_names_length():
 
 def test_crn_default_species_names_are_s0_s1():
     """When species_names is omitted, defaults to S0, S1, ..."""
-    crn = CRN(reactions=[Reaction(torch.tensor([1, 0]), lambda s, t: torch.tensor(1.0))])
+    crn = CRN(
+        reactions=[Reaction(torch.tensor([1, 0]), lambda s, t: torch.tensor(1.0))]
+    )
     assert crn.species_names == ("S0", "S1")
 
 
@@ -169,9 +172,7 @@ def test_evaluate_propensities_birth_death_values():
 
 def test_evaluate_propensities_clamps_to_nonnegative():
     """Propensities must be non-negative even if the propensity fn returns negative."""
-    crn = CRN(
-        reactions=[Reaction(torch.tensor([1]), lambda s, t: torch.tensor(-1.0))]
-    )
+    crn = CRN(reactions=[Reaction(torch.tensor([1]), lambda s, t: torch.tensor(-1.0))])
     a = crn.evaluate_propensities(torch.tensor([5.0]))
     assert a[0].item() == pytest.approx(0.0)
 

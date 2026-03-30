@@ -180,17 +180,21 @@ def test_constant_rate_params_round_trip():
 
 
 def test_enzyme_mm_propensity_rate_proportional_to_enzyme():
-    prop = enzyme_michaelis_menten(k_cat=1.0, k_m=10.0, enzyme_index=0, substrate_index=1)
-    state_low_enzyme  = torch.tensor([1.0, 50.0])
+    prop = enzyme_michaelis_menten(
+        k_cat=1.0, k_m=10.0, enzyme_index=0, substrate_index=1
+    )
+    state_low_enzyme = torch.tensor([1.0, 50.0])
     state_high_enzyme = torch.tensor([10.0, 50.0])
     assert prop(state_low_enzyme, 0.0).item() < prop(state_high_enzyme, 0.0).item()
 
 
 def test_enzyme_mm_propensity_saturates_at_high_substrate():
-    prop = enzyme_michaelis_menten(k_cat=2.0, k_m=1.0, enzyme_index=0, substrate_index=1)
-    state_low  = torch.tensor([5.0, 0.5])
+    prop = enzyme_michaelis_menten(
+        k_cat=2.0, k_m=1.0, enzyme_index=0, substrate_index=1
+    )
+    state_low = torch.tensor([5.0, 0.5])
     state_high = torch.tensor([5.0, 500.0])
-    rate_low  = prop(state_low, 0.0).item()
+    rate_low = prop(state_low, 0.0).item()
     rate_high = prop(state_high, 0.0).item()
     # At high substrate the rate approaches k_cat * enzyme
     assert rate_high == pytest.approx(2.0 * 5.0, rel=0.01)
@@ -198,12 +202,16 @@ def test_enzyme_mm_propensity_saturates_at_high_substrate():
 
 
 def test_enzyme_mm_dependencies_contain_both_enzyme_and_substrate():
-    prop = enzyme_michaelis_menten(k_cat=1.0, k_m=1.0, enzyme_index=2, substrate_index=4)
+    prop = enzyme_michaelis_menten(
+        k_cat=1.0, k_m=1.0, enzyme_index=2, substrate_index=4
+    )
     assert prop.species_dependencies == frozenset({2, 4})
 
 
 def test_enzyme_mm_params_round_trip():
-    params = EnzymeMichaelisMentenParams(k_cat=0.5, k_m=8.0, enzyme_index=1, substrate_index=3)
+    params = EnzymeMichaelisMentenParams(
+        k_cat=0.5, k_m=8.0, enzyme_index=1, substrate_index=3
+    )
     t = params.to_tensor(max_params=4)
     reconstructed = EnzymeMichaelisMentenParams.from_tensor(t)
     assert reconstructed.k_cat == pytest.approx(0.5)
@@ -216,7 +224,9 @@ def test_enzyme_mm_params_round_trip():
 
 
 def test_mass_action_species_dependencies_nonzero_reactants():
-    prop = mass_action(rate_constant=1.0, reactant_stoichiometry=torch.tensor([1.0, 0.0, 1.0]))
+    prop = mass_action(
+        rate_constant=1.0, reactant_stoichiometry=torch.tensor([1.0, 0.0, 1.0])
+    )
     assert prop.species_dependencies == frozenset({0, 2})
 
 

@@ -5,6 +5,7 @@ construction time. Callables are implemented as classes (not lambdas) so that
 their parameters are inspectable via a `.params` property and their species
 dependencies are declared via `.species_dependencies`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,7 +14,6 @@ from typing import Protocol, runtime_checkable
 import torch
 
 from crn_surrogate.crn.reaction import PropensityFn
-
 
 # ── Parameter dataclasses ─────────────────────────────────────────────────────
 
@@ -297,7 +297,9 @@ class _EnzymeMichaelisMentenClosure:
 
     def __init__(self, params: EnzymeMichaelisMentenParams) -> None:
         self._params = params
-        self._species_dependencies = frozenset({params.enzyme_index, params.substrate_index})
+        self._species_dependencies = frozenset(
+            {params.enzyme_index, params.substrate_index}
+        )
 
     def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
         p = self._params

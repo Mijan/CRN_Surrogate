@@ -13,6 +13,7 @@ the GNN enough signal to distinguish reaction roles without hard-coded labels.
 Adding category labels would couple the CRN representation to domain-specific
 knowledge and risk the model short-cutting structural learning.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -100,11 +101,11 @@ def build_bipartite_edges(
     features: list[torch.Tensor] = [torch.empty(0)] * len(EdgeFeature)
     features[EdgeFeature.NET_CHANGE] = stoichiometry[rxn_idx, species_idx].float()
     features[EdgeFeature.IS_STOICHIOMETRIC] = (
-        (stoichiometry[rxn_idx, species_idx].abs() > 0).float()
-    )
+        stoichiometry[rxn_idx, species_idx].abs() > 0
+    ).float()
     features[EdgeFeature.IS_DEPENDENCY] = (
-        (dependency_matrix[rxn_idx, species_idx] > 0).float()
-    )
+        dependency_matrix[rxn_idx, species_idx] > 0
+    ).float()
 
     edge_feat = torch.stack(features, dim=1)  # (E, EDGE_FEAT_DIM)
     assert edge_feat.shape[1] == EDGE_FEAT_DIM
@@ -132,7 +133,5 @@ def _scatter_max(
     Returns:
         (num_groups,) per-group max values.
     """
-    out = torch.full(
-        (num_groups,), float("-inf"), device=src.device, dtype=src.dtype
-    )
+    out = torch.full((num_groups,), float("-inf"), device=src.device, dtype=src.dtype)
     return out.scatter_reduce(0, index, src, reduce="amax")

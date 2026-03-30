@@ -6,6 +6,7 @@ Provides two implementations sharing the same forward signature:
 
 BipartiteGNNEncoder selects which class to instantiate via EncoderConfig.use_attention.
 """
+
 from __future__ import annotations
 
 import torch

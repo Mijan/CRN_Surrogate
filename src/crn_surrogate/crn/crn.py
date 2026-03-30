@@ -1,4 +1,5 @@
 """Chemical Reaction Network: an ordered collection of reactions over a fixed species set."""
+
 from __future__ import annotations
 
 from typing import Sequence
@@ -125,9 +126,9 @@ class CRN:
         Returns:
             (n_reactions,) propensity values, clamped to non-negative.
         """
-        return torch.stack(
-            [rxn.propensity(state, t) for rxn in self._reactions]
-        ).clamp(min=0.0)
+        return torch.stack([rxn.propensity(state, t) for rxn in self._reactions]).clamp(
+            min=0.0
+        )
 
     def reaction(self, index: int) -> Reaction:
         """Access a reaction by index.

@@ -1,4 +1,5 @@
 """End-to-end training loop for the CRN neural surrogate."""
+
 from __future__ import annotations
 
 import os

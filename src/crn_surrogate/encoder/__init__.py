@@ -1,4 +1,5 @@
 """encoder: bipartite GNN encoder for Chemical Reaction Networks."""
+
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.encoder.graph_utils import (
     EDGE_FEAT_DIM,

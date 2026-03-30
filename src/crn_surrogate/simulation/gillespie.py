@@ -3,6 +3,7 @@
 The simulator is CRN-agnostic: it accepts a stoichiometry matrix and a
 propensity callable, with no dependency on the CRN domain class.
 """
+
 from __future__ import annotations
 
 import warnings

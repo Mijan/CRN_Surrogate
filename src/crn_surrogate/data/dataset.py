@@ -1,4 +1,5 @@
 """Dataset and collation utilities for CRN trajectory training data."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -89,7 +89,9 @@ def test_gillespie_birth_death_stationary_mean_matches_analytical():
             propensity_fn=crn.evaluate_propensities,
             initial_state=torch.tensor([10.0]),
             t_max=50.0,
-        ).states[-1, 0].item()
+        )
+        .states[-1, 0]
+        .item()
         for _ in range(50)
     ]
     sample_mean = sum(final_counts) / len(final_counts)

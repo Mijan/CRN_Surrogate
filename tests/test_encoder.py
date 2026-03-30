@@ -177,40 +177,24 @@ def test_attentive_layer_output_shapes_birth_death():
 
 def test_attentive_layer_single_edge_weight_is_one():
     """A species receiving exactly one message must have attention weight 1.0."""
-    d_model = 16
-    layer = AttentiveMessagePassingLayer(d_model)
-
-    # Minimal graph: 1 reaction → 1 species
-    h_species = torch.randn(1, d_model)
-    h_reactions = torch.randn(1, d_model)
-
-    from crn_surrogate.encoder.graph_utils import BipartiteEdges
-
-    edges = BipartiteEdges(
-        rxn_to_species_index=torch.tensor([[0], [0]]),
-        rxn_to_species_feat=torch.zeros(1, EDGE_FEAT_DIM),
-        species_to_rxn_index=torch.tensor([[0], [0]]),
-        species_to_rxn_feat=torch.zeros(1, EDGE_FEAT_DIM),
-    )
-
-    # Compute attention weights via the static helper directly
     raw_scores = torch.tensor([2.5])
-    weights = AttentiveMessagePassingLayer._scatter_softmax(raw_scores, torch.tensor([0]), 1)
+    weights = AttentiveMessagePassingLayer._scatter_softmax(
+        raw_scores, torch.tensor([0]), 1
+    )
     assert weights.item() == pytest.approx(1.0)
 
 
 def test_attentive_layer_weights_sum_to_one_per_receiving_node():
     """Attention weights must sum to 1.0 per receiving node."""
-    d_model = 16
-    n_reactions = 4
     n_species = 2
 
     # Build a manual multi-edge graph: reactions 0,1,2 → species 0; reaction 3 → species 1
-    rxn_idx = torch.tensor([0, 1, 2, 3])
     spe_idx = torch.tensor([0, 0, 0, 1])
     raw_scores = torch.randn(4)
 
-    weights = AttentiveMessagePassingLayer._scatter_softmax(raw_scores, spe_idx, n_species)
+    weights = AttentiveMessagePassingLayer._scatter_softmax(
+        raw_scores, spe_idx, n_species
+    )
 
     # Weights for species 0 (edges 0,1,2) must sum to 1
     assert weights[:3].sum().item() == pytest.approx(1.0, abs=1e-5)
@@ -244,11 +228,15 @@ def test_encoder_attention_and_sum_produce_different_outputs():
     init_state = torch.tensor([50.0, 20.0])
 
     torch.manual_seed(0)
-    enc_sum = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=2, use_attention=False))
+    enc_sum = BipartiteGNNEncoder(
+        EncoderConfig(d_model=16, n_layers=2, use_attention=False)
+    )
     ctx_sum = enc_sum(crn_repr, init_state)
 
     torch.manual_seed(0)
-    enc_att = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=2, use_attention=True))
+    enc_att = BipartiteGNNEncoder(
+        EncoderConfig(d_model=16, n_layers=2, use_attention=True)
+    )
     ctx_att = enc_att(crn_repr, init_state)
 
     assert not torch.allclose(ctx_sum.context_vector, ctx_att.context_vector), (

@@ -5,6 +5,7 @@ world consumed by the neural network encoder.
 
 Flow: symbolic CRN → CRNTensorRepr → BipartiteGNNEncoder → embeddings.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -152,7 +153,7 @@ def crn_to_tensor_repr(crn: "CRN", max_params: int = 4) -> CRNTensorRepr:
         propensity_params=torch.stack(param_rows, dim=0),
         species_names=crn.species_names,
         reaction_names=tuple(rxn.name for rxn in crn.reactions),
-        name=crn.name if hasattr(crn, 'name') else ""
+        name=crn.name if hasattr(crn, "name") else "",
     )
 
 
