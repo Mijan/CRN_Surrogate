@@ -34,6 +34,11 @@ class EncoderConfig:
     def __post_init__(self) -> None:
         if self.type_embed_dim == 0:
             object.__setattr__(self, "type_embed_dim", self.d_model // 4)
+        if self.type_embed_dim >= self.d_model:
+            raise ValueError(
+                f"type_embed_dim ({self.type_embed_dim}) must be strictly "
+                f"less than d_model ({self.d_model})"
+            )
 
     def __repr__(self) -> str:
         return (
