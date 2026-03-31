@@ -37,18 +37,18 @@ class RepressilatorParams:
         k_deg_C: Degradation rate of C.
     """
 
-    k_max_A: float = param_field(20.0, 200.0)
-    k_max_B: float = param_field(20.0, 200.0)
-    k_max_C: float = param_field(20.0, 200.0)
-    k_half_A: float = param_field(10.0, 50.0)
-    k_half_B: float = param_field(10.0, 50.0)
-    k_half_C: float = param_field(10.0, 50.0)
-    n_A: float = param_field(2.0, 5.0, log_uniform=False)
-    n_B: float = param_field(2.0, 5.0, log_uniform=False)
-    n_C: float = param_field(2.0, 5.0, log_uniform=False)
-    k_deg_A: float = param_field(0.05, 0.5)
-    k_deg_B: float = param_field(0.05, 0.5)
-    k_deg_C: float = param_field(0.05, 0.5)
+    k_max_A: float = param_field(1e-4, 1e3) # param_field(20.0, 200.0)
+    k_max_B: float = param_field(1e-4, 1e3) # param_field(20.0, 200.0)
+    k_max_C: float = param_field(1e-4, 1e3) # param_field(20.0, 200.0)
+    k_half_A: float = param_field(1e-4, 1e3) # param_field(10.0, 50.0)
+    k_half_B: float = param_field(1e-4, 1e3) # param_field(10.0, 50.0)
+    k_half_C: float = param_field(1e-4, 1e3) # param_field(10.0, 50.0)
+    n_A: float = param_field(1, 1e2, log_uniform=False) # param_field(2.0, 5.0, log_uniform=False)
+    n_B: float = param_field(1, 1e2, log_uniform=False) # param_field(2.0, 5.0, log_uniform=False)
+    n_C: float =  param_field(1, 1e2, log_uniform=False) # param_field(2.0, 5.0, log_uniform=False)
+    k_deg_A: float = param_field(1e-4, 1e3) # param_field(0.05, 0.5)
+    k_deg_B: float = param_field(1e-4, 1e3) # param_field(0.05, 0.5)
+    k_deg_C: float = param_field(1e-4, 1e3) # param_field(0.05, 0.5)
 
 
 class RepressilatorFactory(MotifFactory[RepressilatorParams]):
