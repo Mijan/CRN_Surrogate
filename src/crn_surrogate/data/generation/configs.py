@@ -10,11 +10,9 @@ class SamplingConfig:
     """Configuration for kinetic parameter sampling.
 
     Attributes:
-        n_samples_per_motif: Number of parameter configurations to sample per motif type.
         random_seed: Seed for the random number generator ensuring reproducibility.
     """
 
-    n_samples_per_motif: int = 500
     random_seed: int = 42
 
 
@@ -45,15 +43,17 @@ class CurationConfig:
 class GenerationConfig:
     """Top-level configuration for the full data generation run.
 
+    Per-motif target counts live on GenerationTask.target, not here.
+
     Attributes:
         sampling: Configuration for kinetic parameter sampling.
         curation: Configuration for trajectory viability filtering.
         n_ssa_trajectories: Number of independent SSA runs per CRN configuration.
         simulation_time: End time for each SSA simulation.
         n_timepoints: Number of evenly-spaced timepoints in the output grid.
-        n_samples_per_motif: Parameter configurations to attempt for each elementary motif.
-        n_samples_per_composed: Parameter configurations to attempt for composed motifs.
-        target_total_viable: Desired total number of viable items in the final dataset.
+        batch_size: Number of parameter configs to sample per batch before curation.
+        max_attempts_multiplier: Maximum total attempts = target * multiplier. If
+            reached, stops and logs a warning with the achieved count.
         output_dir: Directory path where dataset.pt and metadata.json are written.
         random_seed: Master random seed for reproducibility.
     """
@@ -63,8 +63,7 @@ class GenerationConfig:
     n_ssa_trajectories: int = 32
     simulation_time: float = 100.0
     n_timepoints: int = 200
-    n_samples_per_motif: int = 500
-    n_samples_per_composed: int = 300
-    target_total_viable: int = 15000
+    batch_size: int = 64
+    max_attempts_multiplier: int = 10
     output_dir: str = "data/generated"
     random_seed: int = 42

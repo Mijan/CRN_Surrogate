@@ -20,3 +20,4 @@ class MotifType(enum.Enum):
     INCOHERENT_FEEDFORWARD = "incoherent_feedforward"
     REPRESSILATOR = "repressilator"
     SUBSTRATE_INHIBITION = "substrate_inhibition"
+    COMPOSED = "composed"

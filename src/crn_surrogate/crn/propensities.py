@@ -232,6 +232,25 @@ class _MassActionClosure:
             if r != 0.0
         )
 
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with reactant_stoichiometry expanded to n_merged length.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Total species count in the merged CRN.
+
+        Returns:
+            New mass-action propensity with updated stoichiometry vector.
+        """
+        new_rs = torch.zeros(n_merged)
+        for old_idx, order in enumerate(self._reactant_stoichiometry.tolist()):
+            if order != 0.0:
+                new_idx = index_map.get(old_idx, old_idx)
+                new_rs[new_idx] = order
+        return mass_action(self._params.rate_constant, new_rs)
+
     def __repr__(self) -> str:
         return f"MassAction(k={self._params.rate_constant})"
 
@@ -245,9 +264,10 @@ class _HillClosure:
     def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
         p = self._params
         x = state[p.species_index].clamp(min=0.0)
-        x_n = torch.pow(x, p.hill_coefficient)
-        k_n = p.k_m**p.hill_coefficient
-        return p.v_max * x_n / (k_n + x_n + 1e-8)
+        # (x/K)^n / (1 + (x/K)^n) = sigmoid(n * log(x/K))
+        # Using sigmoid avoids float overflow for large hill_coefficient.
+        log_ratio = torch.log((x + 1e-10) / (p.k_m + 1e-8))
+        return p.v_max * torch.sigmoid(p.hill_coefficient * log_ratio)
 
     @property
     def params(self) -> HillParams:
@@ -258,6 +278,26 @@ class _HillClosure:
     def species_dependencies(self) -> frozenset[int]:
         """Index of the species driving this Hill propensity."""
         return frozenset({self._params.species_index})
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with species_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored (Hill propensity uses a scalar species index).
+
+        Returns:
+            New Hill propensity with updated species index.
+        """
+        new_idx = index_map.get(self._params.species_index, self._params.species_index)
+        return hill(
+            self._params.v_max,
+            self._params.k_m,
+            self._params.hill_coefficient,
+            new_idx,
+        )
 
     def __repr__(self) -> str:
         return (
@@ -284,6 +324,20 @@ class _ConstantRateClosure:
     def species_dependencies(self) -> frozenset[int]:
         """No species influence a constant-rate propensity."""
         return frozenset()
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return self — constant propensity has no species dependencies.
+
+        Args:
+            index_map: Ignored.
+            n_merged: Ignored.
+
+        Returns:
+            Self (no-op).
+        """
+        return self
 
     def __repr__(self) -> str:
         return f"ConstantRate(k={self._params.rate})"
@@ -316,6 +370,23 @@ class _EnzymeMichaelisMentenClosure:
     def species_dependencies(self) -> frozenset[int]:
         """Enzyme and substrate both influence this propensity."""
         return self._species_dependencies
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with enzyme_index and substrate_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New enzyme-MM propensity with updated species indices.
+        """
+        p = self._params
+        new_enz = index_map.get(p.enzyme_index, p.enzyme_index)
+        new_sub = index_map.get(p.substrate_index, p.substrate_index)
+        return enzyme_michaelis_menten(p.k_cat, p.k_m, new_enz, new_sub)
 
     def __repr__(self) -> str:
         p = self._params
@@ -613,8 +684,10 @@ class _HillRepressionClosure:
     def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
         p = self._params
         x = state[p.species_index].clamp(min=0.0)
-        ratio_n = torch.pow(x / (p.k_half + 1e-8), p.hill_coefficient)
-        return torch.tensor(p.k_max) / (1.0 + ratio_n + 1e-8)
+        # 1 / (1 + (x/K)^n) = sigmoid(-n * log(x/K))
+        # Using sigmoid avoids float overflow for large hill_coefficient.
+        log_ratio = torch.log((x + 1e-10) / (p.k_half + 1e-8))
+        return torch.tensor(p.k_max) * torch.sigmoid(-p.hill_coefficient * log_ratio)
 
     @property
     def params(self) -> HillRepressionParams:
@@ -625,6 +698,22 @@ class _HillRepressionClosure:
     def species_dependencies(self) -> frozenset[int]:
         """Index of the repressing species."""
         return frozenset({self._params.species_index})
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with species_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New Hill repression propensity with updated species index.
+        """
+        p = self._params
+        new_idx = index_map.get(p.species_index, p.species_index)
+        return hill_repression(p.k_max, p.k_half, p.hill_coefficient, new_idx)
 
     def __repr__(self) -> str:
         p = self._params
@@ -651,10 +740,11 @@ class _HillActivationRepressionClosure:
         p = self._params
         x_act = state[p.activator_index].clamp(min=0.0)
         x_rep = state[p.repressor_index].clamp(min=0.0)
-        act_ratio_n = torch.pow(x_act / (p.k_act + 1e-8), p.n_act)
-        rep_ratio_n = torch.pow(x_rep / (p.k_rep + 1e-8), p.n_rep)
-        activation = act_ratio_n / (1.0 + act_ratio_n + 1e-8)
-        repression = 1.0 / (1.0 + rep_ratio_n + 1e-8)
+        # Each factor is a sigmoid in log-space, stable for large Hill exponents.
+        log_act = torch.log((x_act + 1e-10) / (p.k_act + 1e-8))
+        log_rep = torch.log((x_rep + 1e-10) / (p.k_rep + 1e-8))
+        activation = torch.sigmoid(p.n_act * log_act)
+        repression = torch.sigmoid(-p.n_rep * log_rep)
         return torch.tensor(p.k_max) * activation * repression
 
     @property
@@ -666,6 +756,25 @@ class _HillActivationRepressionClosure:
     def species_dependencies(self) -> frozenset[int]:
         """Activator and repressor both influence this propensity."""
         return self._species_dependencies
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with activator_index and repressor_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New activation-repression propensity with updated species indices.
+        """
+        p = self._params
+        new_act = index_map.get(p.activator_index, p.activator_index)
+        new_rep = index_map.get(p.repressor_index, p.repressor_index)
+        return hill_activation_repression(
+            p.k_max, p.k_act, p.n_act, new_act, p.k_rep, p.n_rep, new_rep
+        )
 
     def __repr__(self) -> str:
         p = self._params
@@ -699,6 +808,22 @@ class _SubstrateInhibitionClosure:
     def species_dependencies(self) -> frozenset[int]:
         """Index of the substrate species."""
         return frozenset({self._params.species_index})
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with species_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New substrate-inhibition propensity with updated species index.
+        """
+        p = self._params
+        new_idx = index_map.get(p.species_index, p.species_index)
+        return substrate_inhibition(p.v_max, p.k_m, p.k_i, new_idx)
 
     def __repr__(self) -> str:
         p = self._params

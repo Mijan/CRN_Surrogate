@@ -9,7 +9,8 @@ import torch
 
 from crn_surrogate.crn.crn import CRN
 from crn_surrogate.crn.reaction import Reaction
-from crn_surrogate.data.generation.motifs.base import MotifFactory
+from crn_surrogate.data.generation.motif_type import MotifType
+from crn_surrogate.data.generation.motifs.base import InitialStateRange, MotifFactory
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,23 @@ class CompositionSpec:
     upstream_factory: MotifFactory
     downstream_factory: MotifFactory
     coupling_map: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ComposedParams:
+    """Parameters for a composed motif: upstream + downstream sub-params.
+
+    Fields do NOT use param_field() since ranges are derived from the
+    sub-factories. The ParameterSampler handles composed params specially
+    by sampling upstream and downstream independently.
+
+    Attributes:
+        upstream_params: Typed params for the upstream sub-factory.
+        downstream_params: Typed params for the downstream sub-factory.
+    """
+
+    upstream_params: object
+    downstream_params: object
 
 
 class CRNComposer:
@@ -185,15 +203,17 @@ class CRNComposer:
         Returns:
             List of Reaction objects with expanded stoichiometry and re-indexed propensities.
         """
+        index_map = {
+            old_idx: down_to_merged_idx[name]
+            for old_idx, name in enumerate(downstream_crn.species_names)
+        }
         reactions = []
         for rxn in downstream_crn.reactions:
             new_stoich = torch.zeros(n_merged)
             for s_idx, s_name in enumerate(downstream_crn.species_names):
                 merged_idx = down_to_merged_idx[s_name]
                 new_stoich[merged_idx] = rxn.stoichiometry[s_idx].item()
-            new_propensity = self._reindex_propensity(
-                rxn.propensity, downstream_crn.species_names, down_to_merged_idx
-            )
+            new_propensity = self._reindex_propensity(rxn.propensity, index_map, n_merged)
             reactions.append(
                 Reaction(
                     stoichiometry=new_stoich,
@@ -206,68 +226,121 @@ class CRNComposer:
     def _reindex_propensity(
         self,
         propensity: Callable[[Any, float], Any],
-        old_species_names: tuple[str, ...],
-        down_to_merged: dict[str, int],
+        index_map: dict[int, int],
+        n_merged: int,
     ) -> Callable[[Any, float], Any]:
         """Return a new propensity with species indices updated to merged indexing.
 
+        Delegates to the propensity's own reindex_species() method, which each
+        closure implements without any isinstance dispatch.
+
         Args:
             propensity: Original propensity callable.
-            old_species_names: Species names in the original (downstream) CRN.
-            down_to_merged: Maps downstream species names to merged indices.
+            index_map: Maps old species index to new (merged) species index.
+            n_merged: Total number of species in the merged CRN.
 
         Returns:
             A new propensity callable with updated species indices, or the
-            original propensity if it has no species index fields to update.
+            original propensity if it does not implement reindex_species.
         """
-        from crn_surrogate.crn.propensities import (
-            ConstantRateParams,
-            EnzymeMichaelisMentenParams,
-            HillActivationRepressionParams,
-            HillParams,
-            HillRepressionParams,
-            MassActionParams,
-            SubstrateInhibitionParams,
-            enzyme_michaelis_menten,
-            hill,
-            hill_activation_repression,
-            hill_repression,
-            substrate_inhibition,
+        if hasattr(propensity, "reindex_species"):
+            return propensity.reindex_species(index_map, n_merged)
+        return propensity
+
+
+class ComposedMotifFactory(MotifFactory[ComposedParams]):
+    """Factory that composes two sub-motifs into a single CRN.
+
+    Implements the MotifFactory interface so the pipeline can treat it
+    identically to elementary factories. Parameters are sampled by
+    ParameterSampler.sample_composed(), which delegates to the sub-factories.
+
+    Args:
+        spec: CompositionSpec defining the upstream/downstream factories
+            and coupling map.
+        species_names: Optional override for the composed species names.
+    """
+
+    def __init__(
+        self,
+        spec: CompositionSpec,
+        *,
+        species_names: tuple[str, ...] | None = None,
+    ) -> None:
+        self._spec = spec
+        self._composer = CRNComposer()
+        merged = self._compute_merged_species()
+        self._n_species = len(merged)
+        self._n_reactions = (
+            spec.upstream_factory.n_reactions + spec.downstream_factory.n_reactions
         )
+        actual_names = species_names or tuple(merged)
+        super().__init__(species_names=actual_names)
 
-        if not hasattr(propensity, "params"):
-            return propensity
+    def _compute_merged_species(self) -> list[str]:
+        """Determine merged species names without running a full simulation.
 
-        params = propensity.params
+        Returns:
+            Ordered list of species names in the composed CRN.
+        """
+        up_names = list(self._spec.upstream_factory.species_names)
+        reverse_map = {v: k for k, v in self._spec.coupling_map.items()}
+        merged = list(up_names)
+        for name in self._spec.downstream_factory.species_names:
+            if name not in reverse_map:
+                merged.append(name)
+        return merged
 
-        if isinstance(params, HillParams):
-            new_idx = down_to_merged[old_species_names[params.species_index]]
-            return hill(params.v_max, params.k_m, params.hill_coefficient, new_idx)
-        elif isinstance(params, HillRepressionParams):
-            new_idx = down_to_merged[old_species_names[params.species_index]]
-            return hill_repression(
-                params.k_max, params.k_half, params.hill_coefficient, new_idx
-            )
-        elif isinstance(params, HillActivationRepressionParams):
-            new_act = down_to_merged[old_species_names[params.activator_index]]
-            new_rep = down_to_merged[old_species_names[params.repressor_index]]
-            return hill_activation_repression(
-                params.k_max,
-                params.k_act,
-                params.n_act,
-                new_act,
-                params.k_rep,
-                params.n_rep,
-                new_rep,
-            )
-        elif isinstance(params, SubstrateInhibitionParams):
-            new_idx = down_to_merged[old_species_names[params.species_index]]
-            return substrate_inhibition(params.v_max, params.k_m, params.k_i, new_idx)
-        elif isinstance(params, EnzymeMichaelisMentenParams):
-            new_enz = down_to_merged[old_species_names[params.enzyme_index]]
-            new_sub = down_to_merged[old_species_names[params.substrate_index]]
-            return enzyme_michaelis_menten(params.k_cat, params.k_m, new_enz, new_sub)
-        elif isinstance(params, (MassActionParams, ConstantRateParams)):
-            return propensity
-        else:
-            return propensity
+    def _default_species_names(self) -> tuple[str, ...]:
+        """Return the merged species names as defaults."""
+        return tuple(self._compute_merged_species())
+
+    @property
+    def n_species(self) -> int:
+        """Total number of species in the composed CRN."""
+        return self._n_species
+
+    @property
+    def n_reactions(self) -> int:
+        """Total number of reactions in the composed CRN."""
+        return self._n_reactions
+
+    @property
+    def motif_type(self) -> MotifType:
+        """Composed factories always return MotifType.COMPOSED."""
+        return MotifType.COMPOSED
+
+    @property
+    def params_type(self) -> type[ComposedParams]:
+        """Parameter type for composed motifs."""
+        return ComposedParams
+
+    def initial_state_ranges(self) -> dict[str, InitialStateRange]:
+        """Merge initial state ranges from both sub-factories.
+
+        For shared species (in coupling_map), the upstream range is used.
+
+        Returns:
+            Dict mapping merged species name to InitialStateRange.
+        """
+        reverse_map = {v: k for k, v in self._spec.coupling_map.items()}
+        ranges: dict[str, InitialStateRange] = {}
+        for name, rng in self._spec.upstream_factory.initial_state_ranges().items():
+            ranges[name] = rng
+        for name, rng in self._spec.downstream_factory.initial_state_ranges().items():
+            if name not in reverse_map:
+                ranges[name] = rng
+        return ranges
+
+    def create(self, params: ComposedParams) -> CRN:
+        """Create the composed CRN from upstream and downstream sub-params.
+
+        Args:
+            params: ComposedParams with upstream_params and downstream_params.
+
+        Returns:
+            Composed CRN with merged species and reactions.
+        """
+        up_crn = self._spec.upstream_factory.create(params.upstream_params)  # type: ignore[arg-type]
+        down_crn = self._spec.downstream_factory.create(params.downstream_params)  # type: ignore[arg-type]
+        return self._composer.compose(up_crn, down_crn, self._spec)
