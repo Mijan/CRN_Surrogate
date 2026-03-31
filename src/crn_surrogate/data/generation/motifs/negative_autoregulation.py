@@ -29,10 +29,10 @@ class NegativeAutoregulationParams:
         k_deg: First-order degradation rate.
     """
 
-    k_max: float = param_field(1.0, 100.0)
-    k_half: float = param_field(5.0, 50.0)
-    n_hill: float = param_field(1.0, 4.0, log_uniform=False)
-    k_deg: float = param_field(0.01, 0.5)
+    k_max: float = param_field(1e-4, 1e3) # param_field(1.0, 100.0)
+    k_half: float = param_field(1e-4, 1e3) # param_field(5.0, 50.0)
+    n_hill: float = param_field(1e-4, 1e3) # param_field(1.0, 4.0, log_uniform=False)
+    k_deg: float = param_field(1e-4, 1e3) # param_field(0.01, 0.5)
 
 
 class NegativeAutoregulationFactory(MotifFactory[NegativeAutoregulationParams]):
