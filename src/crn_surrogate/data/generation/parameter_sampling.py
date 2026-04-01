@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import math
 import random
-from typing import TypeVar
+from typing import TypeVar, cast
 
+from crn_surrogate.data.generation.composer import ComposedParams
 from crn_surrogate.data.generation.configs import SamplingConfig
 from crn_surrogate.data.generation.motifs.base import (
     MotifFactory,
+    MotifParams,
     ParameterRange,
     extract_parameter_ranges,
 )
 
-P = TypeVar("P")
+ParamsT = TypeVar("ParamsT", bound=MotifParams)
 
 
 class ParameterSampler:
@@ -37,13 +39,14 @@ class ParameterSampler:
 
     def sample(
         self,
-        factory: MotifFactory,
+        factory: MotifFactory[ParamsT],
         n_samples: int,
-    ) -> list:
+    ) -> list[ParamsT]:
         """Sample n_samples typed parameter instances for the given factory.
 
-        For ComposedMotifFactory instances, delegates to sample_composed().
-        For elementary factories, samples from param_field() metadata.
+        For composed factories (factory.sub_factories is not None), delegates
+        to _sample_composed(). For elementary factories, samples from
+        param_field() metadata.
 
         Args:
             factory: Motif factory defining parameter ranges and constraints.
@@ -52,17 +55,16 @@ class ParameterSampler:
         Returns:
             List of params instances satisfying factory.validate_params().
         """
-        from crn_surrogate.data.generation.composer import ComposedMotifFactory
-
-        if isinstance(factory, ComposedMotifFactory):
-            return self.sample_composed(factory, n_samples)
+        subs = factory.sub_factories
+        if subs is not None:
+            return cast(list[ParamsT], self._sample_composed(subs, n_samples))
         return self._sample_elementary(factory, n_samples)
 
     def _sample_elementary(
         self,
-        factory: MotifFactory[P],
+        factory: MotifFactory[ParamsT],
         n_samples: int,
-    ) -> list[P]:
+    ) -> list[ParamsT]:
         """Sample n_samples typed params from an elementary (non-composed) factory.
 
         Args:
@@ -73,32 +75,30 @@ class ParameterSampler:
             List of typed params instances.
         """
         ranges = extract_parameter_ranges(factory.params_type)
-        results: list[P] = []
+        results: list[ParamsT] = []
         for _ in range(n_samples):
             params = self._sample_one(factory, ranges)
             results.append(params)
         return results
 
-    def sample_composed(
+    def _sample_composed(
         self,
-        factory: "ComposedMotifFactory",  # type: ignore[name-defined]
+        sub_factories: tuple[MotifFactory, MotifFactory],
         n_samples: int,
-    ) -> list:
+    ) -> list[ComposedParams]:
         """Sample upstream and downstream params independently for a composed factory.
 
         Args:
-            factory: Composed motif factory.
+            sub_factories: (upstream_factory, downstream_factory) pair from
+                factory.sub_factories.
             n_samples: Number of samples to draw.
 
         Returns:
             List of ComposedParams with independently sampled sub-params.
         """
-        from crn_surrogate.data.generation.composer import ComposedParams
-
-        up_params = self._sample_elementary(factory._spec.upstream_factory, n_samples)
-        down_params = self._sample_elementary(
-            factory._spec.downstream_factory, n_samples
-        )
+        upstream_factory, downstream_factory = sub_factories
+        up_params = self._sample_elementary(upstream_factory, n_samples)
+        down_params = self._sample_elementary(downstream_factory, n_samples)
         return [ComposedParams(up, down) for up, down in zip(up_params, down_params)]
 
     def sample_initial_states(
@@ -126,9 +126,9 @@ class ParameterSampler:
 
     def _sample_one(
         self,
-        factory: MotifFactory[P],
+        factory: MotifFactory[ParamsT],
         ranges: dict[str, ParameterRange],
-    ) -> P:
+    ) -> ParamsT:
         """Sample one typed params instance, with rejection for motif-specific constraints.
 
         Args:

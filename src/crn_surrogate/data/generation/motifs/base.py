@@ -10,7 +10,22 @@ from typing import Generic, TypeVar
 from crn_surrogate.crn.crn import CRN
 from crn_surrogate.data.generation.motif_type import MotifType
 
-P = TypeVar("P")
+
+class MotifParams(ABC):
+    """Abstract base class for motif kinetic parameter sets.
+
+    Every concrete params class must:
+    - Be a ``@dataclass(frozen=True)`` subclass of this class.
+    - Declare all kinetic fields using ``param_field()`` so that
+      ``ParameterSampler`` can discover sampling ranges without duplication.
+
+    This class carries no runtime behaviour; it exists to express the
+    type-system constraint that ``MotifFactory[ParamsT]`` is parameterised
+    by a well-formed parameter set, not an arbitrary class.
+    """
+
+
+ParamsT = TypeVar("ParamsT", bound=MotifParams)
 
 
 @dataclass(frozen=True)
@@ -62,7 +77,7 @@ def param_field(
     Returns:
         A dataclass field descriptor with range metadata attached.
     """
-    return field(  # type: ignore[return-value]
+    return field(
         metadata={"range": ParameterRange(low, high, log_uniform=log_uniform)},
     )
 
@@ -98,12 +113,12 @@ def extract_parameter_ranges(params_type: type) -> dict[str, ParameterRange]:
     return ranges
 
 
-class MotifFactory(ABC, Generic[P]):
+class MotifFactory(ABC, Generic[ParamsT]):
     """Abstract factory for constructing CRNs from a specific motif template.
 
-    Type parameter P is the frozen params dataclass for this motif. Each field
-    of P must be declared with param_field() so that the ParameterSampler can
-    discover ranges without duplicating them in the factory.
+    ``ParamsT`` is the frozen ``MotifParams`` dataclass for this motif. Every
+    field of ``ParamsT`` must be declared with ``param_field()`` so that the
+    ``ParameterSampler`` can discover ranges without duplication.
 
     Args:
         species_names: Optional override for species names. If None, uses
@@ -150,7 +165,7 @@ class MotifFactory(ABC, Generic[P]):
 
     @property
     @abstractmethod
-    def params_type(self) -> type[P]:
+    def params_type(self) -> type[ParamsT]:
         """Return the params dataclass class (not an instance).
 
         Used by the ParameterSampler to construct typed params from sampled
@@ -170,11 +185,11 @@ class MotifFactory(ABC, Generic[P]):
         ...
 
     @abstractmethod
-    def create(self, params: P) -> CRN:
+    def create(self, params: ParamsT) -> CRN:
         """Construct a CRN from typed parameters.
 
         Args:
-            params: A frozen dataclass instance of type P.
+            params: A frozen dataclass instance of type ParamsT.
 
         Returns:
             A fully specified CRN.
@@ -188,7 +203,16 @@ class MotifFactory(ABC, Generic[P]):
         """The species names (configurable via constructor)."""
         return self._species_names
 
-    def validate_params(self, params: P) -> None:
+    @property
+    def sub_factories(self) -> tuple[MotifFactory, MotifFactory] | None:
+        """For composed factories, return (upstream, downstream) sub-factories.
+
+        Elementary factories return None. Override in ComposedMotifFactory.
+        ParameterSampler uses this to dispatch sampling without an isinstance check.
+        """
+        return None
+
+    def validate_params(self, params: ParamsT) -> None:
         """Validate parameter values. Override to add motif-specific checks.
 
         Base implementation checks that params is an instance of params_type.
@@ -206,7 +230,7 @@ class MotifFactory(ABC, Generic[P]):
                 f"Expected {self.params_type.__name__}, got {type(params).__name__}"
             )
 
-    def params_from_dict(self, d: dict[str, float]) -> P:
+    def params_from_dict(self, d: dict[str, float]) -> ParamsT:
         """Construct a typed params instance from a dict.
 
         This is the ONLY place where string-keyed dicts are converted to
@@ -216,7 +240,7 @@ class MotifFactory(ABC, Generic[P]):
             d: Dict with keys matching params_type field names.
 
         Returns:
-            An instance of P.
+            An instance of ParamsT.
 
         Raises:
             TypeError: If keys don't match params_type fields.

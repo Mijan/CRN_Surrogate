@@ -18,12 +18,13 @@ from crn_surrogate.data.generation.motif_type import MotifType
 from crn_surrogate.data.generation.motifs.base import (
     InitialStateRange,
     MotifFactory,
+    MotifParams,
     param_field,
 )
 
 
 @dataclass(frozen=True)
-class SubstrateInhibitionParams:
+class SubstrateInhibitionParams(MotifParams):
     """Parameters for the substrate inhibition motif.
 
     Attributes:

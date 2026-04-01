@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from crn_surrogate.data.generation.motif_registry import get_factory
 from crn_surrogate.data.generation.motif_type import MotifType
@@ -20,7 +21,7 @@ class GenerationTask:
             to the factory's motif_type.value if not provided.
     """
 
-    factory: MotifFactory
+    factory: MotifFactory[Any]
     target: int
     label: str = ""
 

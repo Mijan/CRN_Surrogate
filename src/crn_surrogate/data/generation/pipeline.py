@@ -9,6 +9,7 @@ import random
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import torch
 
@@ -16,12 +17,14 @@ from crn_surrogate.crn.crn import CRN
 from crn_surrogate.data.dataset import TrajectoryItem
 from crn_surrogate.data.generation.configs import GenerationConfig
 from crn_surrogate.data.generation.curation import ViabilityFilter
-from crn_surrogate.data.generation.motifs.base import MotifFactory
+from crn_surrogate.data.generation.motifs.base import MotifFactory, MotifParams
 from crn_surrogate.data.generation.parameter_sampling import ParameterSampler
 from crn_surrogate.data.generation.task import GenerationTask
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.interpolation import interpolate_to_grid
+
+_ParamsT = TypeVar("_ParamsT", bound=MotifParams)
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +170,7 @@ class DataGenerationPipeline:
 
     def _generate_motif(
         self,
-        factory: MotifFactory,
+        factory: MotifFactory[_ParamsT],
         target: int,
         label: str,
     ) -> MotifResult:
@@ -218,7 +221,9 @@ class DataGenerationPipeline:
     # --- Single-config evaluation ---
 
     def _evaluate_config(
-        self, factory: MotifFactory, params: object
+        self,
+        factory: MotifFactory[_ParamsT],
+        params: _ParamsT,
     ) -> EvaluationOutcome:
         """Simulate one parameter config and check viability.
 
@@ -229,7 +234,7 @@ class DataGenerationPipeline:
         Returns:
             EvaluationOutcome with a viable TrajectoryItem or a rejection reason.
         """
-        crn = factory.create(params)  # type: ignore[arg-type]
+        crn = factory.create(params)
         initial_state = self._sample_initial_state(factory)
         try:
             trajectories = self._simulate_ensemble(crn, initial_state)
@@ -307,7 +312,7 @@ class DataGenerationPipeline:
     def _build_trajectory_item(
         self,
         crn: CRN,
-        params: object,
+        params: MotifParams,
         initial_state: torch.Tensor,
         trajectories: torch.Tensor,
         motif_label: str,

@@ -7,6 +7,7 @@ from crn_surrogate.data.generation.motifs.auto_catalysis import (
 from crn_surrogate.data.generation.motifs.base import (
     InitialStateRange,
     MotifFactory,
+    MotifParams,
     ParameterRange,
     extract_parameter_ranges,
     param_field,
@@ -51,6 +52,7 @@ __all__ = [
     "IncoherentFeedforwardParams",
     "InitialStateRange",
     "MotifFactory",
+    "MotifParams",
     "NegativeAutoregulationFactory",
     "NegativeAutoregulationParams",
     "ParameterRange",

@@ -10,7 +10,11 @@ import torch
 from crn_surrogate.crn.crn import CRN
 from crn_surrogate.crn.reaction import Reaction
 from crn_surrogate.data.generation.motif_type import MotifType
-from crn_surrogate.data.generation.motifs.base import InitialStateRange, MotifFactory
+from crn_surrogate.data.generation.motifs.base import (
+    InitialStateRange,
+    MotifFactory,
+    MotifParams,
+)
 
 
 @dataclass(frozen=True)
@@ -30,7 +34,7 @@ class CompositionSpec:
 
 
 @dataclass(frozen=True)
-class ComposedParams:
+class ComposedParams(MotifParams):
     """Parameters for a composed motif: upstream + downstream sub-params.
 
     Fields do NOT use param_field() since ranges are derived from the
@@ -42,8 +46,8 @@ class ComposedParams:
         downstream_params: Typed params for the downstream sub-factory.
     """
 
-    upstream_params: object
-    downstream_params: object
+    upstream_params: MotifParams
+    downstream_params: MotifParams
 
 
 class CRNComposer:
@@ -308,6 +312,11 @@ class ComposedMotifFactory(MotifFactory[ComposedParams]):
         return self._n_reactions
 
     @property
+    def sub_factories(self) -> tuple[MotifFactory, MotifFactory]:
+        """Return the upstream and downstream sub-factories."""
+        return (self._spec.upstream_factory, self._spec.downstream_factory)
+
+    @property
     def motif_type(self) -> MotifType:
         """Composed factories always return MotifType.COMPOSED."""
         return MotifType.COMPOSED
@@ -343,6 +352,6 @@ class ComposedMotifFactory(MotifFactory[ComposedParams]):
         Returns:
             Composed CRN with merged species and reactions.
         """
-        up_crn = self._spec.upstream_factory.create(params.upstream_params)  # type: ignore[arg-type]
-        down_crn = self._spec.downstream_factory.create(params.downstream_params)  # type: ignore[arg-type]
+        up_crn = self._spec.upstream_factory.create(params.upstream_params)
+        down_crn = self._spec.downstream_factory.create(params.downstream_params)
         return self._composer.compose(up_crn, down_crn, self._spec)

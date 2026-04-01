@@ -14,12 +14,13 @@ from crn_surrogate.data.generation.motif_type import MotifType
 from crn_surrogate.data.generation.motifs.base import (
     InitialStateRange,
     MotifFactory,
+    MotifParams,
     param_field,
 )
 
 
 @dataclass(frozen=True)
-class ToggleSwitchParams:
+class ToggleSwitchParams(MotifParams):
     """Parameters for the toggle switch motif.
 
     Attributes:
