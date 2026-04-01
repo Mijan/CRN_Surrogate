@@ -34,11 +34,11 @@ class SubstrateInhibitionParams:
         k_deg: Product degradation rate.
     """
 
-    k_in: float = param_field(1e-4, 1e3) # param_field(0.5, 20.0)
-    V_max: float = param_field(1e-4, 1e3) # param_field(1.0, 50.0)
-    K_m: float = param_field(1e-4, 1e3) # param_field(5.0, 50.0)
-    K_i: float = param_field(1e-4, 1e3) # param_field(20.0, 200.0)
-    k_deg: float = param_field(1e-4, 1e3) # param_field(0.01, 0.3)
+    k_in: float = param_field(1e-4, 1e3)  # param_field(0.5, 20.0)
+    V_max: float = param_field(1e-4, 1e3)  # param_field(1.0, 50.0)
+    K_m: float = param_field(1e-4, 1e3)  # param_field(5.0, 50.0)
+    K_i: float = param_field(1e-4, 1e3)  # param_field(20.0, 200.0)
+    k_deg: float = param_field(1e-4, 1e3)  # param_field(0.01, 0.3)
 
 
 class SubstrateInhibitionMotifFactory(MotifFactory[SubstrateInhibitionParams]):

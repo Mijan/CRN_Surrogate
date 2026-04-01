@@ -213,7 +213,9 @@ class CRNComposer:
             for s_idx, s_name in enumerate(downstream_crn.species_names):
                 merged_idx = down_to_merged_idx[s_name]
                 new_stoich[merged_idx] = rxn.stoichiometry[s_idx].item()
-            new_propensity = self._reindex_propensity(rxn.propensity, index_map, n_merged)
+            new_propensity = self._reindex_propensity(
+                rxn.propensity, index_map, n_merged
+            )
             reactions.append(
                 Reaction(
                     stoichiometry=new_stoich,

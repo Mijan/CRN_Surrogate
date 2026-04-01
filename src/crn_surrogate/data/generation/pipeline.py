@@ -217,7 +217,9 @@ class DataGenerationPipeline:
 
     # --- Single-config evaluation ---
 
-    def _evaluate_config(self, factory: MotifFactory, params: object) -> EvaluationOutcome:
+    def _evaluate_config(
+        self, factory: MotifFactory, params: object
+    ) -> EvaluationOutcome:
         """Simulate one parameter config and check viability.
 
         Args:
@@ -235,7 +237,9 @@ class DataGenerationPipeline:
             return EvaluationOutcome(item=None, rejection_reason="simulation_error")
         curation_result = self._filter.check(trajectories)
         if not curation_result.viable:
-            return EvaluationOutcome(item=None, rejection_reason=curation_result.rejection_reason)
+            return EvaluationOutcome(
+                item=None, rejection_reason=curation_result.rejection_reason
+            )
         item = self._build_trajectory_item(
             crn=crn,
             params=params,
@@ -364,7 +368,9 @@ class DataGenerationPipeline:
 
         for label, count in counts.items():
             if count < 50:
-                logger.warning("Motif %r has only %d viable configs (< 50)", label, count)
+                logger.warning(
+                    "Motif %r has only %d viable configs (< 50)", label, count
+                )
 
         by_label: dict[str, list[TrajectoryItem]] = {}
         for item in items:
@@ -466,10 +472,18 @@ class DataGenerationPipeline:
         if n_viable < target:
             logger.warning(
                 "%s: only %d/%d viable after %d attempts (%.1f%% pass rate)",
-                label, n_viable, target, n_attempted, pass_rate,
+                label,
+                n_viable,
+                target,
+                n_attempted,
+                pass_rate,
             )
         else:
             logger.info(
                 "%s: %d/%d viable in %d attempts (%.1f%% pass rate)",
-                label, n_viable, target, n_attempted, pass_rate,
+                label,
+                n_viable,
+                target,
+                n_attempted,
+                pass_rate,
             )

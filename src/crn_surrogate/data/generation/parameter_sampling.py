@@ -96,7 +96,9 @@ class ParameterSampler:
         from crn_surrogate.data.generation.composer import ComposedParams
 
         up_params = self._sample_elementary(factory._spec.upstream_factory, n_samples)
-        down_params = self._sample_elementary(factory._spec.downstream_factory, n_samples)
+        down_params = self._sample_elementary(
+            factory._spec.downstream_factory, n_samples
+        )
         return [ComposedParams(up, down) for up, down in zip(up_params, down_params)]
 
     def sample_initial_states(
@@ -117,8 +119,7 @@ class ParameterSampler:
         results: list[dict[str, int]] = []
         for _ in range(n_samples):
             state = {
-                name: self._rng.randint(r.low, r.high)
-                for name, r in ranges.items()
+                name: self._rng.randint(r.low, r.high) for name, r in ranges.items()
             }
             results.append(state)
         return results

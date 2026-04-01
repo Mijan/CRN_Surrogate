@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field, fields as dc_fields
+from dataclasses import dataclass, field
+from dataclasses import fields as dc_fields
 from typing import Generic, TypeVar
 
 from crn_surrogate.crn.crn import CRN
@@ -202,8 +203,7 @@ class MotifFactory(ABC, Generic[P]):
         """
         if not isinstance(params, self.params_type):
             raise TypeError(
-                f"Expected {self.params_type.__name__}, "
-                f"got {type(params).__name__}"
+                f"Expected {self.params_type.__name__}, got {type(params).__name__}"
             )
 
     def params_from_dict(self, d: dict[str, float]) -> P:

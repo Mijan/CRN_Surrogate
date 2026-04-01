@@ -28,9 +28,9 @@ class AutoCatalysisParams:
         k_deg: First-order degradation rate. Must exceed k_cat for bounded dynamics.
     """
 
-    k_basal: float = param_field(1e-4, 1e3) # param_field(0.1, 10.0)
-    k_cat: float = param_field(1e-4, 1e3) #param_field(0.001, 0.1)
-    k_deg: float = param_field(1e-4, 1e3) #param_field(0.01, 0.5)
+    k_basal: float = param_field(1e-4, 1e3)  # param_field(0.1, 10.0)
+    k_cat: float = param_field(1e-4, 1e3)  # param_field(0.001, 0.1)
+    k_deg: float = param_field(1e-4, 1e3)  # param_field(0.01, 0.5)
 
 
 class AutoCatalysisFactory(MotifFactory[AutoCatalysisParams]):

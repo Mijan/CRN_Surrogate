@@ -30,11 +30,11 @@ class EnzymaticCatalysisParams:
         k_deg_P: Product degradation rate.
     """
 
-    k_on: float = param_field(1e-4, 1e3) # param_field(0.001, 0.1)
-    k_off: float = param_field(1e-4, 1e3) # param_field(0.01, 1.0)
-    k_cat: float = param_field(1e-4, 1e3) # param_field(0.01, 1.0)
-    k_prod: float = param_field(1e-4, 1e3) # param_field(0.5, 20.0)
-    k_deg_P: float = param_field(1e-4, 1e3) # param_field(0.01, 0.5)
+    k_on: float = param_field(1e-4, 1e3)  # param_field(0.001, 0.1)
+    k_off: float = param_field(1e-4, 1e3)  # param_field(0.01, 1.0)
+    k_cat: float = param_field(1e-4, 1e3)  # param_field(0.01, 1.0)
+    k_prod: float = param_field(1e-4, 1e3)  # param_field(0.5, 20.0)
+    k_deg_P: float = param_field(1e-4, 1e3)  # param_field(0.01, 0.5)
 
 
 class EnzymaticCatalysisFactory(MotifFactory[EnzymaticCatalysisParams]):

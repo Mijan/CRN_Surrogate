@@ -73,7 +73,11 @@ class GillespieSSA:
         states = [state.clone()]
 
         for _ in range(max_reactions):
-            a = propensity_fn(state, t).nan_to_num(nan=0.0, posinf=0.0, neginf=0.0).clamp(min=0.0)
+            a = (
+                propensity_fn(state, t)
+                .nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+                .clamp(min=0.0)
+            )
             a_total = a.sum()
             if a_total <= 0:
                 break
