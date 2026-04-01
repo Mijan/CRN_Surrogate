@@ -29,7 +29,6 @@ from crn_surrogate.data.generation.motifs.enzymatic_catalysis import (
 )
 from crn_surrogate.data.generation.motifs.feedforward_loop import (
     IncoherentFeedforwardFactory,
-    IncoherentFeedforwardParams,
 )
 from crn_surrogate.data.generation.motifs.negative_autoregulation import (
     NegativeAutoregulationFactory,
@@ -365,7 +364,9 @@ def test_substrate_inhibition_validate_rejects_ki_le_km() -> None:
     factory = SubstrateInhibitionMotifFactory()
     with pytest.raises(ValueError, match="K_i > K_m"):
         factory.validate_params(
-            SubstrateInhibitionParams(k_in=1.0, V_max=10.0, K_m=50.0, K_i=5.0, k_deg=0.1)
+            SubstrateInhibitionParams(
+                k_in=1.0, V_max=10.0, K_m=50.0, K_i=5.0, k_deg=0.1
+            )
         )
 
 
@@ -395,10 +396,14 @@ def test_birth_death_stoichiometry(birth_death: BirthDeathFactory) -> None:
 def test_toggle_switch_stoichiometry(toggle_switch: ToggleSwitchFactory) -> None:
     """Toggle switch stoichiometry has correct species-specific signs."""
     params = ToggleSwitchParams(
-        k_max_A=10.0, k_max_B=10.0,
-        k_half_A=5.0, k_half_B=5.0,
-        n_A=2.0, n_B=2.0,
-        k_deg_A=0.1, k_deg_B=0.1,
+        k_max_A=10.0,
+        k_max_B=10.0,
+        k_half_A=5.0,
+        k_half_B=5.0,
+        n_A=2.0,
+        n_B=2.0,
+        k_deg_A=0.1,
+        k_deg_B=0.1,
     )
     crn = toggle_switch.create(params)
     stoich = crn.stoichiometry_matrix
@@ -428,17 +433,25 @@ def test_enzymatic_catalysis_stoichiometry(
     # R1: S + E -> C  (-S, -E, +C, 0P)
     assert stoich[0, 0].item() == pytest.approx(-1.0)  # S
     assert stoich[0, 1].item() == pytest.approx(-1.0)  # E
-    assert stoich[0, 2].item() == pytest.approx(1.0)   # C
-    assert stoich[0, 3].item() == pytest.approx(0.0)   # P
+    assert stoich[0, 2].item() == pytest.approx(1.0)  # C
+    assert stoich[0, 3].item() == pytest.approx(0.0)  # P
 
 
 def test_repressilator_cyclic_repression(repressilator: RepressilatorFactory) -> None:
     """Each production reaction only changes its own species (cyclic topology)."""
     params = RepressilatorParams(
-        k_max_A=10.0, k_max_B=10.0, k_max_C=10.0,
-        k_half_A=5.0, k_half_B=5.0, k_half_C=5.0,
-        n_A=2.0, n_B=2.0, n_C=2.0,
-        k_deg_A=0.1, k_deg_B=0.1, k_deg_C=0.1,
+        k_max_A=10.0,
+        k_max_B=10.0,
+        k_max_C=10.0,
+        k_half_A=5.0,
+        k_half_B=5.0,
+        k_half_C=5.0,
+        n_A=2.0,
+        n_B=2.0,
+        n_C=2.0,
+        k_deg_A=0.1,
+        k_deg_B=0.1,
+        k_deg_C=0.1,
     )
     crn = repressilator.create(params)
     stoich = crn.stoichiometry_matrix
