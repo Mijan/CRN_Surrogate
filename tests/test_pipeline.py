@@ -64,7 +64,7 @@ class _AlwaysRejectPipeline(DataGenerationPipeline):
     """Pipeline that rejects every config, for testing the max-attempts cap."""
 
     def _evaluate_config(
-        self, factory: MotifFactory, params: object
+        self, factory: MotifFactory, params: object, motif_label: str = ""
     ) -> EvaluationOutcome:
         return EvaluationOutcome(item=None, rejection_reason="always_rejected")
 
@@ -77,7 +77,7 @@ class _AlternatingPipeline(DataGenerationPipeline):
         self._call_count = 0
 
     def _evaluate_config(
-        self, factory: MotifFactory, params: object
+        self, factory: MotifFactory, params: object, motif_label: str = ""
     ) -> EvaluationOutcome:
         self._call_count += 1
         if self._call_count % 2 == 0:
@@ -202,6 +202,38 @@ def test_generate_motif_rejection_counts_populated(output_dir: Path) -> None:
     assert result.rejection_counts["always_rejected"] == result.n_attempted
 
 
+# --- Unit: task label is threaded into TrajectoryItem --------------------------
+
+
+def test_evaluate_config_uses_task_label_not_motif_type(output_dir: Path) -> None:
+    """_evaluate_config attaches the task label to the TrajectoryItem, not factory.motif_type.value."""
+    config = GenerationConfig(
+        curation=CurationConfig(
+            blowup_threshold=1e9,
+            min_coefficient_of_variation=0.0,
+            max_zero_fraction=1.0,
+            min_reactions_fired=0,
+            max_final_population=1e9,
+        ),
+        n_ssa_trajectories=2,
+        simulation_time=5.0,
+        n_timepoints=10,
+        output_dir=str(output_dir),
+    )
+    factory = BirthDeathFactory()
+    tasks = [GenerationTask(factory, target=1)]
+    pipeline = DataGenerationPipeline(config, tasks)
+    from crn_surrogate.data.generation.motifs.birth_death import BirthDeathParams
+
+    custom_label = "my_custom_label"
+    params = BirthDeathParams(k_prod=10.0, k_deg=0.5)
+    outcome = pipeline._evaluate_config(factory, params, motif_label=custom_label)
+    assert outcome.viable
+    assert outcome.item is not None
+    assert outcome.item.motif_label == custom_label
+    assert outcome.item.motif_label != factory.motif_type.value
+
+
 # --- Unit: pipeline constructor -------------------------------------------------
 
 
@@ -236,7 +268,7 @@ def test_evaluate_config_viable_for_known_good_params(output_dir: Path) -> None:
     from crn_surrogate.data.generation.motifs.birth_death import BirthDeathParams
 
     params = BirthDeathParams(k_prod=10.0, k_deg=0.5)
-    outcome = pipeline._evaluate_config(factory, params)
+    outcome = pipeline._evaluate_config(factory, params, motif_label="birth_death")
     assert outcome.viable
     assert outcome.item is not None
     assert outcome.rejection_reason is None
@@ -257,7 +289,7 @@ def test_evaluate_config_rejected_for_impossible_curation(output_dir: Path) -> N
     from crn_surrogate.data.generation.motifs.birth_death import BirthDeathParams
 
     params = BirthDeathParams(k_prod=10.0, k_deg=0.5)
-    outcome = pipeline._evaluate_config(factory, params)
+    outcome = pipeline._evaluate_config(factory, params, motif_label="birth_death")
     assert not outcome.viable
     assert outcome.item is None
     assert outcome.rejection_reason is not None

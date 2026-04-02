@@ -15,6 +15,10 @@ from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 class TrajectoryItem:
     """Single training example: a CRN tensor representation with M ground-truth SSA trajectories.
 
+    This is intentionally a mutable dataclass (not frozen) because ``cluster_id``
+    is assigned after construction by the pipeline's ``_assign_cluster_ids`` step.
+    All other fields are set at creation and should not be mutated afterward.
+
     Attributes:
         crn_repr: Flat tensor representation of the CRN for the encoder.
         initial_state: (n_species,) initial molecule counts.
@@ -22,6 +26,8 @@ class TrajectoryItem:
             time grid. M >= 2 is required to compute variance-matching loss.
         times: (T,) shared time grid for all M trajectories.
         motif_label: String label identifying the motif type (e.g., "birth_death").
+            For composed motifs this is the descriptive task label set in
+            GenerationTask (e.g., "toggle_switch+birth_death_readout").
         cluster_id: Integer cluster / class identifier assigned during dataset curation.
             Defaults to -1 (unassigned).
         params: Raw kinetic parameter dict used to generate this CRN instance.

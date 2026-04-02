@@ -246,12 +246,18 @@ class CRNComposer:
             n_merged: Total number of species in the merged CRN.
 
         Returns:
-            A new propensity callable with updated species indices, or the
-            original propensity if it does not implement reindex_species.
+            A new propensity callable with updated species indices.
+
+        Raises:
+            TypeError: If the propensity does not implement reindex_species.
         """
-        if hasattr(propensity, "reindex_species"):
-            return propensity.reindex_species(index_map, n_merged)
-        return propensity
+        if not hasattr(propensity, "reindex_species"):
+            raise TypeError(
+                f"Propensity {propensity!r} does not implement reindex_species(). "
+                f"All propensity types must support reindexing for CRN composition. "
+                f"Add a reindex_species(index_map, n_merged) method to the propensity class."
+            )
+        return propensity.reindex_species(index_map, n_merged)
 
 
 class ComposedMotifFactory(MotifFactory[ComposedParams]):

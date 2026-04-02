@@ -212,6 +212,64 @@ def test_invalid_upstream_species_raises(
         composer.compose(crn_up, crn_down, spec)
 
 
+def test_reindex_propensity_raises_for_missing_method(
+    composer: CRNComposer,
+) -> None:
+    """_reindex_propensity raises TypeError when propensity lacks reindex_species."""
+
+    class _NonReindexablePropensity:
+        def __call__(self, state: object, t: float) -> object:
+            return 0.0
+
+    bad_propensity = _NonReindexablePropensity()
+    with pytest.raises(TypeError, match="reindex_species"):
+        composer._reindex_propensity(bad_propensity, index_map={0: 1}, n_merged=2)
+
+
+def test_composed_propensities_reference_correct_merged_indices(
+    composer: CRNComposer,
+    bd_factory: BirthDeathFactory,
+) -> None:
+    """After composition with remapping, downstream propensities use merged species indices."""
+    from crn_surrogate.crn.crn import CRN
+    from crn_surrogate.crn.propensities import MassActionParams, constant_rate, mass_action
+    from crn_surrogate.crn.reaction import Reaction
+
+    # upstream: species "X" at index 0
+    crn_up = bd_factory.create(BirthDeathParams(k_prod=5.0, k_deg=0.1))
+
+    # downstream: species "Y" at index 0 in its own indexing; no coupling
+    reactions_down = [
+        Reaction(
+            stoichiometry=torch.tensor([1.0]),
+            propensity=constant_rate(2.0),
+            name="Y_birth",
+        ),
+        Reaction(
+            stoichiometry=torch.tensor([-1.0]),
+            propensity=mass_action(0.5, torch.tensor([1.0])),
+            name="Y_death",
+        ),
+    ]
+    crn_down = CRN(reactions=reactions_down, species_names=["Y"])
+
+    spec = CompositionSpec(
+        upstream_factory=bd_factory,
+        downstream_factory=bd_factory,
+        coupling_map={},
+    )
+    merged = composer.compose(crn_up, crn_down, spec)
+
+    # In merged CRN: X=0, Y=1
+    # The downstream mass-action propensity originally referenced species 0 (Y in downstream).
+    # After reindexing it should reference species 1 (Y in merged).
+    downstream_death = merged.reactions[-1]
+    assert isinstance(downstream_death.propensity.params, MassActionParams)
+    # species_dependencies should include index 1 (Y in merged), not 0
+    assert 1 in downstream_death.propensity.species_dependencies
+    assert 0 not in downstream_death.propensity.species_dependencies
+
+
 def test_invalid_downstream_species_raises(
     composer: CRNComposer,
     bd_factory: BirthDeathFactory,

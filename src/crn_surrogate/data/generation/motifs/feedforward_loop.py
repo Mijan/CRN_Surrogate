@@ -43,18 +43,18 @@ class IncoherentFeedforwardParams(MotifParams):
         k_deg_Z: Degradation rate of Z.
     """
 
-    k_X: float = param_field(1e-4, 1e3)  # param_field(1.0, 20.0)
-    k_deg_X: float = param_field(1e-4, 1e3)  # param_field(0.05, 0.3)
-    k_max_Y: float = param_field(1e-4, 1e3)  # param_field(5.0, 50.0)
-    K_act_Y: float = param_field(1e-4, 1e3)  # param_field(5.0, 30.0)
-    n_act_Y: float = param_field(1e-4, 1e3)  # param_field(1.5, 3.0, log_uniform=False)
-    k_deg_Y: float = param_field(1e-4, 1e3)  # param_field(0.05, 0.3)
-    k_max_Z: float = param_field(1e-4, 1e3)  # param_field(5.0, 50.0)
-    K_act_Z: float = param_field(1e-4, 1e3)  # param_field(5.0, 30.0)
-    n_act_Z: float = param_field(1e-4, 1e3)  # param_field(1.5, 3.0, log_uniform=False)
-    K_rep_Z: float = param_field(1e-4, 1e3)  # param_field(5.0, 30.0)
-    n_rep_Z: float = param_field(1e-4, 1e3)  # param_field(1.5, 3.0, log_uniform=False)
-    k_deg_Z: float = param_field(1e-4, 1e3)  # param_field(0.05, 0.3)
+    k_X: float = param_field(0.1, 100.0)
+    k_deg_X: float = param_field(0.01, 2.0)
+    k_max_Y: float = param_field(1.0, 200.0)
+    K_act_Y: float = param_field(1.0, 100.0)
+    n_act_Y: float = param_field(0.5, 6.0, log_uniform=False)
+    k_deg_Y: float = param_field(0.01, 2.0)
+    k_max_Z: float = param_field(1.0, 200.0)
+    K_act_Z: float = param_field(1.0, 100.0)
+    n_act_Z: float = param_field(0.5, 6.0, log_uniform=False)
+    K_rep_Z: float = param_field(1.0, 100.0)
+    n_rep_Z: float = param_field(0.5, 6.0, log_uniform=False)
+    k_deg_Z: float = param_field(0.01, 2.0)
 
 
 class IncoherentFeedforwardFactory(MotifFactory[IncoherentFeedforwardParams]):

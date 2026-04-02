@@ -28,8 +28,8 @@ class BirthDeathParams(MotifParams):
         k_deg: First-order degradation rate.
     """
 
-    k_prod: float = param_field(1e-4, 1e3)
-    k_deg: float = param_field(1e-4, 1e3)
+    k_prod: float = param_field(0.05, 200.0)
+    k_deg: float = param_field(0.005, 5.0)
 
 
 class BirthDeathFactory(MotifFactory[BirthDeathParams]):

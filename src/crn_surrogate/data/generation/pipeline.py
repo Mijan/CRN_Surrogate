@@ -201,7 +201,7 @@ class DataGenerationPipeline:
             params_batch = self._sampler.sample(factory, n_samples=batch_size)
             for params in params_batch:
                 n_attempted += 1
-                outcome = self._evaluate_config(factory, params)
+                outcome = self._evaluate_config(factory, params, motif_label=label)
                 if outcome.viable:
                     viable_items.append(outcome.item)  # type: ignore[arg-type]
                 else:
@@ -224,12 +224,17 @@ class DataGenerationPipeline:
         self,
         factory: MotifFactory[_ParamsT],
         params: _ParamsT,
+        motif_label: str,
     ) -> EvaluationOutcome:
         """Simulate one parameter config and check viability.
 
         Args:
             factory: Motif factory used to build the CRN.
             params: Typed params instance for this config.
+            motif_label: Task-level label to attach to the TrajectoryItem.
+                For elementary motifs this equals factory.motif_type.value;
+                for composed motifs this is the descriptive task label
+                (e.g. "toggle_switch+birth_death_readout").
 
         Returns:
             EvaluationOutcome with a viable TrajectoryItem or a rejection reason.
@@ -250,7 +255,7 @@ class DataGenerationPipeline:
             params=params,
             initial_state=initial_state,
             trajectories=trajectories,
-            motif_label=factory.motif_type.value,
+            motif_label=motif_label,
         )
         return EvaluationOutcome(item=item, rejection_reason=None)
 
