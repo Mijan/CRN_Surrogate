@@ -135,7 +135,9 @@ def test_edge_feature_enum_has_expected_channels():
 def test_bipartite_graph_builder_feat_dim_matches_edge_feat_dim():
     """BipartiteGraphBuilder must produce feature vectors of width EDGE_FEAT_DIM."""
     crn = birth_death()
-    edges = BipartiteGraphBuilder(crn.stoichiometry_matrix, crn.dependency_matrix).build()
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
     assert edges.rxn_to_species_feat.shape[1] == EDGE_FEAT_DIM
     assert edges.edge_feat_dim == EDGE_FEAT_DIM
 
@@ -148,7 +150,9 @@ def test_sum_layer_output_shapes_birth_death():
     d_model = 16
     layer = SumMessagePassingLayer(d_model)
     crn = birth_death()
-    edges = BipartiteGraphBuilder(crn.stoichiometry_matrix, crn.dependency_matrix).build()
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
 
     h_species = torch.randn(crn.n_species, d_model)
     h_reactions = torch.randn(crn.n_reactions, d_model)
@@ -166,7 +170,9 @@ def test_attentive_layer_output_shapes_birth_death():
     d_model = 16
     layer = AttentiveMessagePassingLayer(d_model)
     crn = birth_death()
-    edges = BipartiteGraphBuilder(crn.stoichiometry_matrix, crn.dependency_matrix).build()
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
 
     h_species = torch.randn(crn.n_species, d_model)
     h_reactions = torch.randn(crn.n_reactions, d_model)
@@ -208,7 +214,9 @@ def test_attentive_layer_gradients_flow():
     d_model = 16
     layer = AttentiveMessagePassingLayer(d_model)
     crn = birth_death()
-    edges = BipartiteGraphBuilder(crn.stoichiometry_matrix, crn.dependency_matrix).build()
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
 
     h_species = torch.randn(crn.n_species, d_model, requires_grad=True)
     h_reactions = torch.randn(crn.n_reactions, d_model, requires_grad=True)

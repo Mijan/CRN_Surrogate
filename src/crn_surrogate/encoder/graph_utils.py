@@ -159,9 +159,9 @@ class BipartiteGraphBuilder:
             (E, EDGE_FEAT_DIM) feature tensor.
         """
         features: list[torch.Tensor] = [torch.empty(0)] * len(EdgeFeature)
-        features[EdgeFeature.NET_CHANGE] = (
-            self._stoichiometry[rxn_indices, species_indices].float()
-        )
+        features[EdgeFeature.NET_CHANGE] = self._stoichiometry[
+            rxn_indices, species_indices
+        ].float()
         features[EdgeFeature.IS_STOICHIOMETRIC] = (
             self._stoichiometry[rxn_indices, species_indices].abs() > 0
         ).float()

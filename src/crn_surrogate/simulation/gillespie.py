@@ -6,7 +6,6 @@ propensity callable, with no dependency on the CRN domain class.
 
 from __future__ import annotations
 
-import bisect
 import warnings
 from typing import TYPE_CHECKING, Callable
 

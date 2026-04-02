@@ -65,7 +65,9 @@ class CRN:
             self._species_names = tuple(f"S{i}" for i in range(n_species))
 
         # Validate external_species indices
-        invalid = frozenset(idx for idx in external_species if idx not in range(n_species))
+        invalid = frozenset(
+            idx for idx in external_species if idx not in range(n_species)
+        )
         if invalid:
             raise ValueError(
                 f"external_species indices {sorted(invalid)} are out of range "

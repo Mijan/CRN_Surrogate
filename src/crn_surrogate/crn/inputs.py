@@ -53,9 +53,7 @@ class PulseEvent:
 
     def __post_init__(self) -> None:
         if self.t_start < 0:
-            raise ValueError(
-                f"PulseEvent.t_start must be >= 0, got {self.t_start}"
-            )
+            raise ValueError(f"PulseEvent.t_start must be >= 0, got {self.t_start}")
         if self.t_end <= self.t_start:
             raise ValueError(
                 f"PulseEvent.t_end must be > t_start, "
@@ -246,7 +244,9 @@ def constant_input(
     Returns:
         PulseSchedule with one pulse covering [t_start, t_end).
     """
-    return PulseSchedule(events=(PulseEvent(t_start=t_start, t_end=t_end, amplitude=amplitude),))
+    return PulseSchedule(
+        events=(PulseEvent(t_start=t_start, t_end=t_end, amplitude=amplitude),)
+    )
 
 
 def single_pulse(
@@ -311,7 +311,9 @@ def repeated_pulse(
     for i in range(n_pulses):
         pulse_start = t_start + i * period
         pulse_end = pulse_start + on_duration
-        events.append(PulseEvent(t_start=pulse_start, t_end=pulse_end, amplitude=amplitude))
+        events.append(
+            PulseEvent(t_start=pulse_start, t_end=pulse_end, amplitude=amplitude)
+        )
     return PulseSchedule(events=tuple(events), baseline=baseline)
 
 
@@ -348,7 +350,7 @@ def step_sequence(
         if times_list[i + 1] <= times_list[i]:
             raise ValueError(
                 f"times must be strictly increasing: times[{i}]={times_list[i]}, "
-                f"times[{i+1}]={times_list[i+1]}"
+                f"times[{i + 1}]={times_list[i + 1]}"
             )
     events: list[PulseEvent] = []
     for i, amp in enumerate(amplitudes_list):

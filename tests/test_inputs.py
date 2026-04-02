@@ -12,14 +12,12 @@ from crn_surrogate.crn.inputs import (
     InputProtocol,
     PulseEvent,
     PulseSchedule,
-    constant_input,
     random_input_protocol,
     random_protocol,
     repeated_pulse,
     single_pulse,
     step_sequence,
 )
-
 
 # ── 4.1 PulseEvent ────────────────────────────────────────────────────────────
 
@@ -198,13 +196,17 @@ def test_input_protocol_breakpoints_deduplicates_shared_times() -> None:
 
 def test_input_protocol_input_species_indices() -> None:
     """input_species_indices returns the set of controlled species."""
-    protocol = InputProtocol(schedules={0: single_pulse(0.0, 1.0, 1.0), 3: single_pulse(0.0, 1.0, 1.0)})
+    protocol = InputProtocol(
+        schedules={0: single_pulse(0.0, 1.0, 1.0), 3: single_pulse(0.0, 1.0, 1.0)}
+    )
     assert protocol.input_species_indices() == frozenset({0, 3})
 
 
 def test_input_protocol_n_input_species() -> None:
     """n_input_species returns the count of controlled species."""
-    protocol = InputProtocol(schedules={0: single_pulse(0.0, 1.0, 1.0), 3: single_pulse(0.0, 1.0, 1.0)})
+    protocol = InputProtocol(
+        schedules={0: single_pulse(0.0, 1.0, 1.0), 3: single_pulse(0.0, 1.0, 1.0)}
+    )
     assert protocol.n_input_species() == 2
 
 
@@ -323,7 +325,7 @@ def test_random_input_protocol_all_schedules_valid() -> None:
 def test_crn_with_external_species_valid() -> None:
     """CRN accepts external_species that have zero net stoichiometric change."""
     from crn_surrogate.crn.crn import CRN
-    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
 
     # Species 0: internal (protein), species 1: external (inducer, catalytic only)
@@ -341,7 +343,11 @@ def test_crn_with_external_species_valid() -> None:
             name="degradation",
         ),
     ]
-    crn = CRN(reactions=reactions, species_names=["protein", "inducer"], external_species=frozenset({1}))
+    crn = CRN(
+        reactions=reactions,
+        species_names=["protein", "inducer"],
+        external_species=frozenset({1}),
+    )
     assert crn.n_external_species == 1
     assert bool(crn.is_external[1]) is True
     assert bool(crn.is_external[0]) is False
@@ -361,7 +367,11 @@ def test_crn_external_species_with_nonzero_stoich_raises() -> None:
         ),
     ]
     with pytest.raises(ValueError, match="nonzero net stoichiometric change"):
-        CRN(reactions=reactions, species_names=["A", "B"], external_species=frozenset({1}))
+        CRN(
+            reactions=reactions,
+            species_names=["A", "B"],
+            external_species=frozenset({1}),
+        )
 
 
 def test_crn_external_species_out_of_range_raises() -> None:
@@ -371,7 +381,9 @@ def test_crn_external_species_out_of_range_raises() -> None:
     from crn_surrogate.crn.reaction import Reaction
 
     reactions = [
-        Reaction(stoichiometry=torch.tensor([1.0]), propensity=constant_rate(1.0), name="r1"),
+        Reaction(
+            stoichiometry=torch.tensor([1.0]), propensity=constant_rate(1.0), name="r1"
+        ),
     ]
     with pytest.raises(ValueError, match="out of range"):
         CRN(reactions=reactions, external_species=frozenset({5}))
@@ -380,7 +392,7 @@ def test_crn_external_species_out_of_range_raises() -> None:
 def test_crn_is_external_property() -> None:
     """is_external returns correct boolean array."""
     from crn_surrogate.crn.crn import CRN
-    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
 
     reactions = [
@@ -401,7 +413,7 @@ def test_crn_is_external_property() -> None:
 def test_crn_internal_species_mask_is_complement() -> None:
     """internal_species_mask is the complement of is_external."""
     from crn_surrogate.crn.crn import CRN
-    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
 
     reactions = [
@@ -413,6 +425,7 @@ def test_crn_internal_species_mask_is_complement() -> None:
     ]
     crn = CRN(reactions=reactions, external_species=frozenset({1}))
     import numpy as np
+
     np.testing.assert_array_equal(crn.internal_species_mask, ~crn.is_external)
 
 
@@ -475,7 +488,6 @@ def test_gillespie_with_empty_protocol_behaves_identically() -> None:
 def test_gillespie_external_species_values_match_protocol() -> None:
     """External species in recorded trajectory match the protocol at each time."""
     from crn_surrogate.simulation.gillespie import GillespieSSA
-    from crn_surrogate.simulation.interpolation import interpolate_to_grid
 
     crn, _, _ = _make_birth_death_with_inducer()
     # Inducer is 50 for t in [2, 8), 0 outside
@@ -550,7 +562,7 @@ def test_gillespie_external_stoich_violation_raises() -> None:
 def test_crn_tensor_repr_is_external_tensor_populated() -> None:
     """crn_to_tensor_repr correctly populates the is_external tensor."""
     from crn_surrogate.crn.crn import CRN
-    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
     from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 
@@ -625,8 +637,7 @@ def test_edge_construction_keeps_species_to_rxn_for_external() -> None:
 def test_gillespie_records_state_at_pulse_start_and_end() -> None:
     """Trajectory contains events at exactly the pulse t_start and t_end times."""
     from crn_surrogate.crn import CRN, InputProtocol, PulseEvent, PulseSchedule
-    from crn_surrogate.crn.examples import birth_death
-    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
     from crn_surrogate.simulation import GillespieSSA
 
@@ -679,7 +690,7 @@ def test_gillespie_external_species_value_changes_at_breakpoint() -> None:
     breakpoints, and verifies the external species transitions at t_start.
     """
     from crn_surrogate.crn import CRN, InputProtocol, PulseEvent, PulseSchedule
-    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
     from crn_surrogate.simulation import GillespieSSA, interpolate_to_grid
 
