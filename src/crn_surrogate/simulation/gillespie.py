@@ -103,8 +103,11 @@ class GillespieSSA:
         for idx, value in protocol.evaluate(0.0).items():
             state[idx] = value
 
-        # Build sorted list of breakpoints to partition the simulation
+        # Build sorted list of breakpoints to partition the simulation.
+        # Filter to <= t_max so that infinite breakpoints (from constant_input)
+        # do not cause simulation to run past t_max.
         breakpoints_list = sorted(set(protocol.breakpoints()) | {0.0, t_max})
+        breakpoints_list = [bp for bp in breakpoints_list if bp <= t_max]
 
         times = [0.0]
         states = [state.clone()]
@@ -147,8 +150,19 @@ class GillespieSSA:
             for ext_idx, value in protocol.evaluate(t).items():
                 state[ext_idx] = value
 
+            # Record state at each intermediate breakpoint so that input
+            # transitions are captured exactly by interpolate_to_grid.
+            if t < t_max:
+                times.append(t)
+                states.append(state.clone())
+
             if total_reactions >= max_reactions:
                 break
+
+        # Ensure the final state at t_max is always recorded.
+        if times[-1] < t_max:
+            times.append(t_max)
+            states.append(state.clone())
 
         times_tensor = torch.tensor(times)
         states_tensor = torch.stack(states, dim=0)

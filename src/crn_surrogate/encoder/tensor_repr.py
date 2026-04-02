@@ -24,7 +24,7 @@ from crn_surrogate.crn.propensities import (
     MassActionParams,
     SubstrateInhibitionParams,
 )
-from crn_surrogate.encoder.graph_utils import BipartiteEdges, build_bipartite_edges
+from crn_surrogate.encoder.graph_utils import BipartiteEdges, BipartiteGraphBuilder
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.crn import CRN
@@ -77,7 +77,8 @@ class CRNTensorRepr:
     dependency_matrix: torch.Tensor
     propensity_type_ids: torch.Tensor
     propensity_params: torch.Tensor
-    is_external: torch.Tensor = None  # type: ignore[assignment]
+    # Default None for backward compatibility; __post_init__ sets all-False tensor
+    is_external: torch.Tensor | None = None
     species_names: tuple[str, ...] = ()
     reaction_names: tuple[str, ...] = ()
     name: str = ""
@@ -105,9 +106,9 @@ class CRNTensorRepr:
     def bipartite_edges(self) -> BipartiteEdges:
         """Lazily computed and cached bipartite edges for this CRN's graph structure."""
         if not hasattr(self, "_cached_edges"):
-            edges = build_bipartite_edges(
+            edges = BipartiteGraphBuilder(
                 self.stoichiometry, self.dependency_matrix, self.is_external
-            )
+            ).build()
             object.__setattr__(self, "_cached_edges", edges)
         return self._cached_edges  # type: ignore[attr-defined]
 

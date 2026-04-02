@@ -1,6 +1,6 @@
 """Bipartite graph edge construction for species-reaction message passing.
 
-Provides BipartiteEdges, EdgeFeature, EDGE_FEAT_DIM, build_bipartite_edges,
+Provides BipartiteEdges, EdgeFeature, EDGE_FEAT_DIM, BipartiteGraphBuilder,
 and _scatter_max, used by the message-passing encoder to represent
 species-reaction connectivity.
 
@@ -77,69 +77,100 @@ class BipartiteEdges:
         return int(self.rxn_to_species_feat.shape[-1])
 
 
-def build_bipartite_edges(
-    stoichiometry: torch.Tensor,
-    dependency_matrix: torch.Tensor,
-    is_external: torch.Tensor | None = None,
-) -> BipartiteEdges:
-    """Extract bipartite edges from stoichiometry and dependency matrices.
+class BipartiteGraphBuilder:
+    """Constructs BipartiteEdges from stoichiometry and dependency matrices.
 
-    An edge exists between reaction r and species s wherever |S[r,s]| > 0
-    (stoichiometric involvement) OR D[r,s] > 0 (propensity dependency,
-    e.g. a catalytic enzyme).
+    Handles edge feature computation and asymmetric filtering for external
+    species: external species send messages to reactions (species-to-reaction
+    edges are kept) but receive no messages back (reaction-to-species edges
+    targeting external species are excluded).
 
-    For externally controlled species (is_external[s] == True):
-    - Species-to-reaction edges ARE created: external species influence reaction
-      propensities via dependency edges.
-    - Reaction-to-species edges are NOT created: nothing flows back into external
-      species (their dynamics are prescribed by the input protocol, not CRN kinetics).
+    Usage::
 
-    Args:
-        stoichiometry: (n_reactions, n_species) net change matrix.
-        dependency_matrix: (n_reactions, n_species) binary dependency matrix.
-        is_external: (n_species,) boolean tensor; True for externally controlled
-            species. Defaults to all-False if not provided.
-
-    Returns:
-        BipartiteEdges with EDGE_FEAT_DIM-dimensional features for both
-        message directions.
+        builder = BipartiteGraphBuilder(stoichiometry, dependency_matrix, is_external)
+        edges = builder.build()
     """
-    n_reactions, n_species = stoichiometry.shape
-    if is_external is None:
-        is_external = torch.zeros(n_species, dtype=torch.bool, device=stoichiometry.device)
 
-    # All edges (both directions use the same connectivity mask)
-    mask = (stoichiometry.abs() > 0) | (dependency_matrix > 0)
-    rxn_idx, species_idx = mask.nonzero(as_tuple=True)
+    def __init__(
+        self,
+        stoichiometry: torch.Tensor,
+        dependency_matrix: torch.Tensor,
+        is_external: torch.Tensor | None = None,
+    ) -> None:
+        """
+        Args:
+            stoichiometry: (n_reactions, n_species) net change matrix.
+            dependency_matrix: (n_reactions, n_species) binary dependency matrix.
+            is_external: (n_species,) boolean tensor; True for externally
+                controlled species. Defaults to all-False.
+        """
+        self._stoichiometry = stoichiometry
+        self._dependency_matrix = dependency_matrix
+        n_species = stoichiometry.shape[1]
+        self._is_external = (
+            is_external
+            if is_external is not None
+            else torch.zeros(n_species, dtype=torch.bool, device=stoichiometry.device)
+        )
 
-    def _edge_features(r_idx: torch.Tensor, s_idx: torch.Tensor) -> torch.Tensor:
+    def build(self) -> BipartiteEdges:
+        """Construct the bipartite edge sets.
+
+        An edge exists between reaction r and species s wherever |S[r,s]| > 0
+        (stoichiometric involvement) OR D[r,s] > 0 (propensity dependency,
+        e.g. a catalytic enzyme).
+
+        Returns:
+            BipartiteEdges with EDGE_FEAT_DIM-dimensional features for both
+            message directions. Reaction-to-species edges are excluded for
+            external species.
+        """
+        mask = (self._stoichiometry.abs() > 0) | (self._dependency_matrix > 0)
+        rxn_idx, species_idx = mask.nonzero(as_tuple=True)
+
+        # Species-to-reaction: all edges (external species may affect propensities)
+        s2r_feat = self._compute_edge_features(rxn_idx, species_idx)
+
+        # Reaction-to-species: exclude external species targets
+        internal_mask = ~self._is_external[species_idx]
+        r2s_rxn_idx = rxn_idx[internal_mask]
+        r2s_species_idx = species_idx[internal_mask]
+        r2s_feat = self._compute_edge_features(r2s_rxn_idx, r2s_species_idx)
+
+        return BipartiteEdges(
+            rxn_to_species_index=torch.stack([r2s_rxn_idx, r2s_species_idx], dim=0),
+            rxn_to_species_feat=r2s_feat,
+            species_to_rxn_index=torch.stack([species_idx, rxn_idx], dim=0),
+            species_to_rxn_feat=s2r_feat,
+        )
+
+    def _compute_edge_features(
+        self,
+        rxn_indices: torch.Tensor,
+        species_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute EDGE_FEAT_DIM-dimensional features for a set of edges.
+
+        Args:
+            rxn_indices: (E,) reaction indices for each edge.
+            species_indices: (E,) species indices for each edge.
+
+        Returns:
+            (E, EDGE_FEAT_DIM) feature tensor.
+        """
         features: list[torch.Tensor] = [torch.empty(0)] * len(EdgeFeature)
-        features[EdgeFeature.NET_CHANGE] = stoichiometry[r_idx, s_idx].float()
+        features[EdgeFeature.NET_CHANGE] = (
+            self._stoichiometry[rxn_indices, species_indices].float()
+        )
         features[EdgeFeature.IS_STOICHIOMETRIC] = (
-            stoichiometry[r_idx, s_idx].abs() > 0
+            self._stoichiometry[rxn_indices, species_indices].abs() > 0
         ).float()
         features[EdgeFeature.IS_DEPENDENCY] = (
-            dependency_matrix[r_idx, s_idx] > 0
+            self._dependency_matrix[rxn_indices, species_indices] > 0
         ).float()
         feat = torch.stack(features, dim=1)  # (E, EDGE_FEAT_DIM)
         assert feat.shape[1] == EDGE_FEAT_DIM
         return feat
-
-    # Species-to-reaction: keep all edges (external species may affect propensities)
-    s2r_feat = _edge_features(rxn_idx, species_idx)
-
-    # Reaction-to-species: exclude edges where the target species is external
-    internal_mask = ~is_external[species_idx]
-    r2s_rxn_idx = rxn_idx[internal_mask]
-    r2s_species_idx = species_idx[internal_mask]
-    r2s_feat = _edge_features(r2s_rxn_idx, r2s_species_idx)
-
-    return BipartiteEdges(
-        rxn_to_species_index=torch.stack([r2s_rxn_idx, r2s_species_idx], dim=0),
-        rxn_to_species_feat=r2s_feat,
-        species_to_rxn_index=torch.stack([species_idx, rxn_idx], dim=0),
-        species_to_rxn_feat=s2r_feat,
-    )
 
 
 def _scatter_max(

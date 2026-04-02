@@ -343,8 +343,8 @@ def test_crn_with_external_species_valid() -> None:
     ]
     crn = CRN(reactions=reactions, species_names=["protein", "inducer"], external_species=frozenset({1}))
     assert crn.n_external_species == 1
-    assert crn.is_external[1] is True
-    assert crn.is_external[0] is False
+    assert bool(crn.is_external[1]) is True
+    assert bool(crn.is_external[0]) is False
 
 
 def test_crn_external_species_with_nonzero_stoich_raises() -> None:
@@ -585,14 +585,14 @@ def test_crn_tensor_repr_is_external_all_false_for_standard_crn() -> None:
 
 def test_edge_construction_excludes_rxn_to_external_species() -> None:
     """Reaction-to-species edges are excluded for external species."""
-    from crn_surrogate.encoder.graph_utils import build_bipartite_edges
+    from crn_surrogate.encoder.graph_utils import BipartiteGraphBuilder
 
     # 2 reactions, 3 species: species 2 is external
     stoichiometry = torch.tensor([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])
     dependency = torch.tensor([[0.0, 0.0, 1.0], [1.0, 0.0, 1.0]])
     is_external = torch.tensor([False, False, True])
 
-    edges = build_bipartite_edges(stoichiometry, dependency, is_external)
+    edges = BipartiteGraphBuilder(stoichiometry, dependency, is_external).build()
 
     # Reaction-to-species edges should not target species 2
     if edges.rxn_to_species_index.numel() > 0:
@@ -604,16 +604,205 @@ def test_edge_construction_excludes_rxn_to_external_species() -> None:
 
 def test_edge_construction_keeps_species_to_rxn_for_external() -> None:
     """Species-to-reaction edges are kept for external species."""
-    from crn_surrogate.encoder.graph_utils import build_bipartite_edges
+    from crn_surrogate.encoder.graph_utils import BipartiteGraphBuilder
 
     stoichiometry = torch.tensor([[1.0, 0.0, 0.0]])
     dependency = torch.tensor([[0.0, 0.0, 1.0]])  # species 2 → reaction 0
     is_external = torch.tensor([False, False, True])
 
-    edges = build_bipartite_edges(stoichiometry, dependency, is_external)
+    edges = BipartiteGraphBuilder(stoichiometry, dependency, is_external).build()
 
     # Species-to-reaction: species 2 should appear as source
     source_species = edges.species_to_rxn_index[0]  # row 0 = species sources
     assert (source_species == 2).sum().item() >= 1, (
         "External species 2 should still send messages to reactions"
+    )
+
+
+# ── Fix 1: breakpoint recording tests ─────────────────────────────────────────
+
+
+def test_gillespie_records_state_at_pulse_start_and_end() -> None:
+    """Trajectory contains events at exactly the pulse t_start and t_end times."""
+    from crn_surrogate.crn import CRN, InputProtocol, PulseEvent, PulseSchedule
+    from crn_surrogate.crn.examples import birth_death
+    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.reaction import Reaction
+    from crn_surrogate.simulation import GillespieSSA
+
+    # External species (idx 1) drives birth; internal species (idx 0) degrades
+    birth_prop = mass_action(
+        rate_constant=1.0, reactant_stoichiometry=torch.tensor([0.0, 1.0])
+    )
+    death_prop = mass_action(
+        rate_constant=0.1, reactant_stoichiometry=torch.tensor([1.0, 0.0])
+    )
+    crn = CRN(
+        reactions=[
+            Reaction(stoichiometry=torch.tensor([1.0, 0.0]), propensity=birth_prop),
+            Reaction(stoichiometry=torch.tensor([-1.0, 0.0]), propensity=death_prop),
+        ],
+        species_names=["A", "I"],
+        external_species=frozenset({1}),
+    )
+
+    t_start_pulse, t_end_pulse = 5.0, 15.0
+    schedule = PulseSchedule(
+        events=(PulseEvent(t_start=t_start_pulse, t_end=t_end_pulse, amplitude=50.0),),
+        baseline=0.0,
+    )
+    protocol = InputProtocol(schedules={1: schedule})
+
+    ssa = GillespieSSA()
+    traj = ssa.simulate(
+        stoichiometry=crn.stoichiometry_matrix,
+        propensity_fn=crn.evaluate_propensities,
+        initial_state=torch.tensor([0.0, 0.0]),
+        t_max=20.0,
+        input_protocol=protocol,
+        external_species=crn.external_species,
+    )
+
+    times_list = traj.times.tolist()
+    assert any(abs(t - t_start_pulse) < 1e-10 for t in times_list), (
+        f"Trajectory missing event at pulse t_start={t_start_pulse}"
+    )
+    assert any(abs(t - t_end_pulse) < 1e-10 for t in times_list), (
+        f"Trajectory missing event at pulse t_end={t_end_pulse}"
+    )
+
+
+def test_gillespie_external_species_value_changes_at_breakpoint() -> None:
+    """Interpolated external species value changes at the correct breakpoint time.
+
+    Uses a very slow system (near-zero propensity) so no reactions fire between
+    breakpoints, and verifies the external species transitions at t_start.
+    """
+    from crn_surrogate.crn import CRN, InputProtocol, PulseEvent, PulseSchedule
+    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.reaction import Reaction
+    from crn_surrogate.simulation import GillespieSSA, interpolate_to_grid
+
+    # Extremely slow birth so no reactions fire; death is also near-zero
+    birth_prop = mass_action(
+        rate_constant=1e-6, reactant_stoichiometry=torch.tensor([0.0, 1.0])
+    )
+    death_prop = mass_action(
+        rate_constant=1e-6, reactant_stoichiometry=torch.tensor([1.0, 0.0])
+    )
+    crn = CRN(
+        reactions=[
+            Reaction(stoichiometry=torch.tensor([1.0, 0.0]), propensity=birth_prop),
+            Reaction(stoichiometry=torch.tensor([-1.0, 0.0]), propensity=death_prop),
+        ],
+        species_names=["A", "I"],
+        external_species=frozenset({1}),
+    )
+
+    t_on = 3.0
+    amplitude = 99.0
+    schedule = PulseSchedule(
+        events=(PulseEvent(t_start=t_on, t_end=10.0, amplitude=amplitude),),
+        baseline=0.0,
+    )
+    protocol = InputProtocol(schedules={1: schedule})
+
+    ssa = GillespieSSA()
+    traj = ssa.simulate(
+        stoichiometry=crn.stoichiometry_matrix,
+        propensity_fn=crn.evaluate_propensities,
+        initial_state=torch.tensor([0.0, 0.0]),
+        t_max=10.0,
+        input_protocol=protocol,
+        external_species=crn.external_species,
+    )
+
+    t_query = torch.linspace(0.0, 10.0, 1000)
+    grid = interpolate_to_grid(traj.times, traj.states, t_query)
+
+    # Before t_on: external species should be 0
+    before_mask = t_query < t_on - 1e-6
+    assert (grid[before_mask, 1] == 0.0).all(), (
+        "External species should be 0 before pulse start"
+    )
+
+    # After t_on: external species should be amplitude
+    after_mask = t_query > t_on + 1e-6
+    after_vals = grid[after_mask, 1]
+    # Allow for a few grid points that might straddle the breakpoint
+    assert (after_vals >= amplitude - 1e-6).sum() > after_vals.shape[0] * 0.9, (
+        "External species should be at amplitude after pulse start"
+    )
+
+
+# ── Fix 2: inf breakpoint filtering ───────────────────────────────────────────
+
+
+def test_gillespie_constant_input_terminates_at_t_max() -> None:
+    """constant_input (t_end=inf) does not cause simulation to run past t_max."""
+    from crn_surrogate.crn import CRN, InputProtocol, constant_input
+    from crn_surrogate.crn.propensities import mass_action
+    from crn_surrogate.crn.reaction import Reaction
+    from crn_surrogate.simulation import GillespieSSA
+
+    birth_prop = mass_action(
+        rate_constant=1.0, reactant_stoichiometry=torch.tensor([0.0, 1.0])
+    )
+    death_prop = mass_action(
+        rate_constant=0.5, reactant_stoichiometry=torch.tensor([1.0, 0.0])
+    )
+    crn = CRN(
+        reactions=[
+            Reaction(stoichiometry=torch.tensor([1.0, 0.0]), propensity=birth_prop),
+            Reaction(stoichiometry=torch.tensor([-1.0, 0.0]), propensity=death_prop),
+        ],
+        species_names=["A", "I"],
+        external_species=frozenset({1}),
+    )
+
+    t_max = 20.0
+    protocol = InputProtocol(schedules={1: constant_input(amplitude=10.0)})
+
+    ssa = GillespieSSA()
+    traj = ssa.simulate(
+        stoichiometry=crn.stoichiometry_matrix,
+        propensity_fn=crn.evaluate_propensities,
+        initial_state=torch.tensor([0.0, 0.0]),
+        t_max=t_max,
+        input_protocol=protocol,
+        external_species=crn.external_species,
+    )
+
+    assert traj.times[-1].item() <= t_max, (
+        f"Simulation ran past t_max={t_max}: last time={traj.times[-1].item()}"
+    )
+
+
+# ── BipartiteGraphBuilder: external species edge count ─────────────────────────
+
+
+def test_bipartite_graph_builder_external_species_has_zero_incoming_edges() -> None:
+    """External species connected to 2 reactions: s2r=2 edges, r2s=0 edges for it."""
+    from crn_surrogate.encoder.graph_utils import BipartiteGraphBuilder
+
+    # 2 reactions, 2 species: species 1 is external
+    # Reaction 0: produces species 0, depends on species 1
+    # Reaction 1: degrades species 0, no dependency on species 1
+    stoichiometry = torch.tensor([[1.0, 0.0], [-1.0, 0.0]])
+    dependency = torch.tensor([[0.0, 1.0], [1.0, 0.0]])
+    is_external = torch.tensor([False, True])
+
+    edges = BipartiteGraphBuilder(stoichiometry, dependency, is_external).build()
+
+    # Reaction-to-species: no edge should target species 1
+    if edges.rxn_to_species_index.numel() > 0:
+        r2s_targets = edges.rxn_to_species_index[1]
+        assert (r2s_targets == 1).sum().item() == 0, (
+            "External species 1 should have 0 reaction-to-species edges"
+        )
+
+    # Species-to-reaction: species 1 should have exactly 1 edge (to reaction 0)
+    s2r_sources = edges.species_to_rxn_index[0]
+    assert (s2r_sources == 1).sum().item() == 1, (
+        "External species 1 should have 1 species-to-reaction edge"
     )

@@ -100,6 +100,8 @@ class PulseSchedule:
                     f"PulseEvents overlap: event {i} ends at {e_i.t_end} but "
                     f"event {i + 1} starts at {e_next.t_start}"
                 )
+        # Cache start times for O(log n) bisect lookup in evaluate()
+        object.__setattr__(self, "_starts", tuple(e.t_start for e in sorted_events))
 
     def evaluate(self, t: float) -> float:
         """Return the amplitude at time t, or baseline if no pulse is active.
@@ -116,9 +118,7 @@ class PulseSchedule:
         """
         if not self.events:
             return self.baseline
-        # Find the last event whose t_start <= t
-        starts = [e.t_start for e in self.events]
-        idx = bisect.bisect_right(starts, t) - 1
+        idx = bisect.bisect_right(self._starts, t) - 1  # type: ignore[attr-defined]
         if idx >= 0 and self.events[idx].t_end > t:
             return self.events[idx].amplitude
         return self.baseline
@@ -163,6 +163,10 @@ class InputProtocol:
     """
 
     schedules: dict[int, PulseSchedule]
+
+    def __post_init__(self) -> None:
+        # Defensive copy: the dict is mutable, but PulseSchedule values are frozen.
+        object.__setattr__(self, "schedules", dict(self.schedules))
 
     def input_species_indices(self) -> frozenset[int]:
         """Return the set of species indices that are externally controlled.
