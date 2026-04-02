@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 
 from crn_surrogate.configs.model_config import ProtocolEncoderConfig
-from crn_surrogate.crn.inputs import EMPTY_PROTOCOL
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import InputProtocol
@@ -44,7 +43,9 @@ class ProtocolEncoder(nn.Module):
         self._config = config
         raw_dim = config.species_embed_dim + _N_SCALAR_FEATURES
 
-        self._species_embed = nn.Embedding(config.max_input_species, config.species_embed_dim)
+        self._species_embed = nn.Embedding(
+            config.max_input_species, config.species_embed_dim
+        )
 
         layers: list[nn.Module] = [nn.Linear(raw_dim, config.d_event), nn.SiLU()]
         for _ in range(config.n_layers - 1):
@@ -123,7 +124,9 @@ class ProtocolEncoder(nn.Module):
             for local_k, species_idx in enumerate(sorted_species):
                 schedule = protocol.schedules[species_idx]
                 for event in schedule.events:
-                    item_events.append((local_k, event.t_start, event.t_end, event.amplitude))
+                    item_events.append(
+                        (local_k, event.t_start, event.t_end, event.amplitude)
+                    )
             all_items.append(item_events)
 
         max_events = max((len(evts) for evts in all_items), default=0)

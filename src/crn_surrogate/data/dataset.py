@@ -122,7 +122,9 @@ class CRNCollator:
         cluster_ids = torch.full((B,), fill_value=-1, dtype=torch.long)
 
         # Determine whether any item has a non-None internal_species_mask.
-        has_internal_mask = any(item.internal_species_mask is not None for item in batch)
+        has_internal_mask = any(
+            item.internal_species_mask is not None for item in batch
+        )
         internal_species_mask_batch = (
             torch.zeros(B, max_species, dtype=torch.bool) if has_internal_mask else None
         )

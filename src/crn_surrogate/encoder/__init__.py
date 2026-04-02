@@ -7,11 +7,11 @@ from crn_surrogate.encoder.graph_utils import (
     BipartiteGraphBuilder,
     EdgeFeature,
 )
-from crn_surrogate.encoder.protocol_encoder import ProtocolEncoder
 from crn_surrogate.encoder.message_passing import (
     AttentiveMessagePassingLayer,
     SumMessagePassingLayer,
 )
+from crn_surrogate.encoder.protocol_encoder import ProtocolEncoder
 from crn_surrogate.encoder.tensor_repr import (
     CRNTensorRepr,
     PropensityType,

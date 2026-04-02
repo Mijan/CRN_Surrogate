@@ -315,11 +315,15 @@ def _make_nll_sde_and_ctx(n_species: int = 2, d_protocol: int = 0):
     from crn_surrogate.crn.examples import lotka_volterra
     from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
     from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
+
     crn = lotka_volterra()
     enc = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=1))
     crn_repr = crn_to_tensor_repr(crn)
     ctx = enc(crn_repr, torch.zeros(n_species))
-    sde = CRNNeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol), n_species=n_species)
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
+        n_species=n_species,
+    )
     return sde, ctx
 
 
@@ -347,7 +351,9 @@ def test_gaussian_nll_with_protocol_embedding_changes_value():
 
     loss_a = loss_fn.compute(sde, ctx, traj, times, dt=0.1, protocol_embedding=emb_a)
     loss_b = loss_fn.compute(sde, ctx, traj, times, dt=0.1, protocol_embedding=emb_b)
-    assert not torch.isclose(loss_a, loss_b), "Different protocol embeddings should give different NLL"
+    assert not torch.isclose(loss_a, loss_b), (
+        "Different protocol embeddings should give different NLL"
+    )
 
 
 def test_gaussian_nll_internal_mask_reduces_loss_when_species_is_wrong():
