@@ -692,7 +692,8 @@ def test_gillespie_external_species_value_changes_at_breakpoint() -> None:
     from crn_surrogate.crn import CRN, InputProtocol, PulseEvent, PulseSchedule
     from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
-    from crn_surrogate.simulation import GillespieSSA, interpolate_to_grid
+    from crn_surrogate.simulation import GillespieSSA
+    from crn_surrogate.simulation.interpolation import TimegridUtils
 
     # Extremely slow birth so no reactions fire; death is also near-zero
     birth_prop = mass_action(
@@ -729,7 +730,7 @@ def test_gillespie_external_species_value_changes_at_breakpoint() -> None:
     )
 
     t_query = torch.linspace(0.0, 10.0, 1000)
-    grid = interpolate_to_grid(traj.times, traj.states, t_query)
+    grid = TimegridUtils.interpolate_to_grid(traj.times, traj.states, t_query)
 
     # Before t_on: external species should be 0
     before_mask = t_query < t_on - 1e-6

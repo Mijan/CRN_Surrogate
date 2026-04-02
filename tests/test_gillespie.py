@@ -6,8 +6,8 @@ Covers:
 - Non-negative molecule counts at all times.
 - Final times do not exceed t_max.
 - Stationary mean of birth-death converges to k_birth/k_death (analytical result).
-- interpolate_to_grid: zero-order hold semantics, correct shape.
-- interpolate_to_grid: handles trajectories that end before t_max.
+- TimegridUtils.interpolate_to_grid: zero-order hold semantics, correct shape.
+- TimegridUtils.interpolate_to_grid: handles trajectories that end before t_max.
 """
 
 import pytest
@@ -15,7 +15,7 @@ import torch
 
 from crn_surrogate.crn.examples import birth_death, lotka_volterra
 from crn_surrogate.simulation.gillespie import GillespieSSA
-from crn_surrogate.simulation.interpolation import interpolate_to_grid
+from crn_surrogate.simulation.interpolation import TimegridUtils
 
 # ── GillespieSSA with CRN.evaluate_propensities ────────────────────────────────
 
@@ -137,7 +137,7 @@ def test_interpolate_to_grid_output_shape_matches_grid_length():
     event_times = torch.tensor([0.0, 1.0, 2.0, 3.0])
     event_states = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
     grid = torch.linspace(0.0, 3.0, 7)
-    result = interpolate_to_grid(event_times, event_states, grid)
+    result = TimegridUtils.interpolate_to_grid(event_times, event_states, grid)
     assert result.shape == (7, 1)
 
 
@@ -147,7 +147,7 @@ def test_interpolate_to_grid_zero_order_hold_semantics():
     event_states = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
     grid = torch.tensor([0.5, 1.5, 2.5])
 
-    result = interpolate_to_grid(event_times, event_states, grid)
+    result = TimegridUtils.interpolate_to_grid(event_times, event_states, grid)
 
     assert result[0, 0].item() == pytest.approx(0.0)  # 0.5 → event at t=0
     assert result[1, 0].item() == pytest.approx(1.0)  # 1.5 → event at t=1
@@ -158,7 +158,7 @@ def test_interpolate_to_grid_grid_point_at_exact_event_time():
     """A grid point coinciding with an event returns that event's state."""
     event_times = torch.tensor([0.0, 2.0, 4.0])
     event_states = torch.tensor([[5.0], [10.0], [15.0]])
-    result = interpolate_to_grid(event_times, event_states, torch.tensor([2.0]))
+    result = TimegridUtils.interpolate_to_grid(event_times, event_states, torch.tensor([2.0]))
     assert result[0, 0].item() == pytest.approx(10.0)
 
 
@@ -174,7 +174,7 @@ def test_interpolate_to_grid_handles_trajectory_shorter_than_tmax():
     )
     dense_grid = torch.linspace(0.0, 10.0, 100)  # extends well past trajectory end
 
-    result = interpolate_to_grid(traj.times, traj.states, dense_grid)
+    result = TimegridUtils.interpolate_to_grid(traj.times, traj.states, dense_grid)
 
     assert result.shape == (100, 1)
     assert (result >= 0).all()

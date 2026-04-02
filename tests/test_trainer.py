@@ -21,7 +21,7 @@ from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
-from crn_surrogate.simulation.interpolation import interpolate_to_grid
+from crn_surrogate.simulation.trajectory import Trajectory
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer
 
@@ -50,25 +50,15 @@ def _make_dataset(
     crn_repr = crn_to_tensor_repr(crn)
     items = []
     for _ in range(n_items):
-        trajs = torch.stack(
-            [
-                interpolate_to_grid(
-                    ssa.simulate(
-                        crn.stoichiometry_matrix,
-                        crn.evaluate_propensities,
-                        init.clone(),
-                        t_max=5.0,
-                    ).times,
-                    ssa.simulate(
-                        crn.stoichiometry_matrix,
-                        crn.evaluate_propensities,
-                        init.clone(),
-                        t_max=5.0,
-                    ).states,
-                    time_grid,
-                )
-                for _ in range(M)
-            ]
+        trajs = Trajectory.stack_on_grid(
+            ssa.simulate_batch(
+                stoichiometry=crn.stoichiometry_matrix,
+                propensity_fn=crn.evaluate_propensities,
+                initial_state=init.clone(),
+                t_max=5.0,
+                n_trajectories=M,
+            ),
+            time_grid,
         )
         items.append(
             TrajectoryItem(

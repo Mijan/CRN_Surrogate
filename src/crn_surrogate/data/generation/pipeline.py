@@ -22,7 +22,7 @@ from crn_surrogate.data.generation.parameter_sampling import ParameterSampler
 from crn_surrogate.data.generation.task import GenerationTask
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
-from crn_surrogate.simulation.interpolation import interpolate_to_grid
+from crn_surrogate.simulation.trajectory import Trajectory
 
 _ParamsT = TypeVar("_ParamsT", bound=MotifParams)
 
@@ -271,29 +271,14 @@ class DataGenerationPipeline:
         Returns:
             (M, T, n_species) trajectory tensor.
         """
-        trajectories = [
-            self._simulate_single(crn, initial_state)
-            for _ in range(self._config.n_ssa_trajectories)
-        ]
-        return torch.stack(trajectories, dim=0)
-
-    def _simulate_single(self, crn: CRN, initial_state: torch.Tensor) -> torch.Tensor:
-        """Run one SSA simulation and interpolate to the time grid.
-
-        Args:
-            crn: CRN to simulate.
-            initial_state: (n_species,) initial molecule counts.
-
-        Returns:
-            (T, n_species) interpolated trajectory.
-        """
-        result = self._ssa.simulate(
+        trajectories = self._ssa.simulate_batch(
             stoichiometry=crn.stoichiometry_matrix,
             propensity_fn=crn.evaluate_propensities,
             initial_state=initial_state.clone(),
             t_max=self._config.simulation_time,
+            n_trajectories=self._config.n_ssa_trajectories,
         )
-        return interpolate_to_grid(result.times, result.states, self._time_grid)
+        return Trajectory.stack_on_grid(trajectories, self._time_grid)
 
     # --- Initial state ---
 
