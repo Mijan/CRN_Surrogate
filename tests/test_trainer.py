@@ -225,6 +225,29 @@ def test_trainer_writes_profiler_batch_csv(tmp_path):
     assert os.path.exists(os.path.join(log_dir, "profiler_batches.csv"))
 
 
+def test_batch_to_device_moves_tensors_and_passes_through_non_tensors(tmp_path):
+    """_batch_to_device moves all tensor values and leaves non-tensors unchanged."""
+    encoder, sde, model_config, _ = _small_model()
+    config = TrainingConfig(
+        max_epochs=1,
+        batch_size=2,
+        n_sde_samples=2,
+        log_dir=str(tmp_path / "logs"),
+        checkpoint_dir=str(tmp_path / "ckpt"),
+        scheduler_type=SchedulerType.COSINE,
+    )
+    trainer = Trainer(encoder, sde, model_config, config)
+    batch = {
+        "stoichiometry": torch.randn(2, 3, 1),
+        "species_mask": torch.ones(2, 1, dtype=torch.bool),
+        "some_string": "not_a_tensor",
+    }
+    moved = trainer._batch_to_device(batch)
+    assert moved["stoichiometry"].device == trainer._device
+    assert moved["species_mask"].device == trainer._device
+    assert moved["some_string"] == "not_a_tensor"
+
+
 def test_trainer_profiler_batch_csv_contains_forward_and_backward_columns(tmp_path):
     """Each row in profiler_batches.csv must have forward and backward timing columns."""
     import csv as csv_module

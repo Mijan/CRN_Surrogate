@@ -53,6 +53,11 @@ class ModelEvaluator:
         Returns:
             (K, T, n_species) stacked trajectories.
         """
+        device = next(self._encoder.parameters()).device
+        crn_repr = crn_repr.to(device)
+        initial_state = initial_state.to(device)
+        times = times.to(device)
+
         self._encoder.eval()
         self._sde.eval()
         with torch.no_grad():

@@ -54,11 +54,16 @@ class DynamicsVisualizer:
             crn_repr: Tensor representation of the CRN.
             initial_state: (n_species,) initial state used for encoding.
         """
+        device = next(encoder.parameters()).device
+        crn_repr = crn_repr.to(device)
+        initial_state = initial_state.to(device)
+
         encoder.eval()
         sde.eval()
         with torch.no_grad():
             self._ctx: CRNContext = encoder(crn_repr, initial_state)
         self._sde = sde
+        self._device = device
         self._initial_state = initial_state
 
     def evaluate_over_state_range(
@@ -87,12 +92,13 @@ class DynamicsVisualizer:
         Returns:
             DynamicsProfile with learned and optional analytical values.
         """
+        state_range = state_range.to(self._device)
         N = len(state_range)
         states = (
             self._initial_state.unsqueeze(0).expand(N, -1).clone()
         )  # (N, n_species)
         states[:, species_index] = state_range
-        t_batch = torch.full((N,), t)
+        t_batch = torch.full((N,), t, device=self._device)
 
         with torch.no_grad():
             learned_drift = self._sde.drift(

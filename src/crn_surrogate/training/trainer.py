@@ -95,8 +95,8 @@ class Trainer:
         self._scheduler = self._build_scheduler()
         self._best_val_loss = float("inf")
 
-        device = next(encoder.parameters(), torch.zeros(1)).device
-        self._timer = PhaseTimer(device=device)
+        self._device = next(encoder.parameters(), torch.zeros(1)).device
+        self._timer = PhaseTimer(device=self._device)
         self._csv_logger = ProfileLogger(train_config.log_dir)
         self._wandb: WandbLogger | None = None
         if train_config.use_wandb:
@@ -181,6 +181,13 @@ class Trainer:
 
         return result
 
+    def _batch_to_device(self, batch: dict) -> dict:
+        """Move all tensor values in a batch dict to the training device."""
+        return {
+            k: v.to(self._device) if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
+
     def _train_epoch(self, loader: DataLoader, epoch: int) -> tuple[float, float]:
         """Run one training epoch and return (mean loss, mean pre-clip grad norm)."""
         self._encoder.train()
@@ -191,6 +198,7 @@ class Trainer:
 
         for batch in tqdm(loader, desc="train", leave=False):
             self._timer.start_batch(n_batches=n_batches)
+            batch = self._batch_to_device(batch)
 
             with self._timer.time("forward"):
                 loss = self._compute_batch_loss(batch, epoch)
@@ -309,6 +317,7 @@ class Trainer:
         n_batches = 0
         with torch.no_grad():
             for batch in loader:
+                batch = self._batch_to_device(batch)
                 total_rollout += self._compute_batch_rollout_loss(batch).item()
                 total_nll += self._compute_batch_nll(batch).item()
                 n_batches += 1

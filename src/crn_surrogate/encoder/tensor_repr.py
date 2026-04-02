@@ -112,6 +112,29 @@ class CRNTensorRepr:
             object.__setattr__(self, "_cached_edges", edges)
         return self._cached_edges  # type: ignore[attr-defined]
 
+    def to(self, device: torch.device) -> CRNTensorRepr:
+        """Return a copy with all tensors moved to the given device.
+
+        The cached bipartite edges are NOT carried over; they are lazily
+        recomputed on the new device when first accessed.
+
+        Returns self if already on the target device (avoids unnecessary copies).
+        """
+        if self.stoichiometry.device == device:
+            return self
+        return CRNTensorRepr(
+            stoichiometry=self.stoichiometry.to(device),
+            dependency_matrix=self.dependency_matrix.to(device),
+            propensity_type_ids=self.propensity_type_ids.to(device),
+            propensity_params=self.propensity_params.to(device),
+            is_external=(
+                self.is_external.to(device) if self.is_external is not None else None
+            ),
+            species_names=self.species_names,
+            reaction_names=self.reaction_names,
+            name=self.name,
+        )
+
 
 def crn_to_tensor_repr(crn: "CRN", max_params: int = 8) -> CRNTensorRepr:
     """Convert a CRN to its flat tensor representation.

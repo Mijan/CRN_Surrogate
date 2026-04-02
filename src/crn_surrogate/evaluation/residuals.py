@@ -98,10 +98,16 @@ class ResidualAnalyzer:
         if T < 2:
             raise ValueError(f"Need T >= 2 time steps, got T={T}")
 
+        device = next(self._encoder.parameters()).device
+        trajectories = trajectories.to(device)
+        times = times.to(device)
+        initial_state = initial_state.to(device)
+        crn_repr = self._crn_repr.to(device)
+
         self._encoder.eval()
         self._sde.eval()
         with torch.no_grad():
-            ctx = self._encoder(self._crn_repr, initial_state)
+            ctx = self._encoder(crn_repr, initial_state)
 
             # Batch all M*(T-1) transitions
             all_y_t = trajectories[:, :-1, :].reshape(
