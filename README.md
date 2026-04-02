@@ -7,31 +7,34 @@ Given a CRN defined by its stoichiometry, propensity kinetics, and an initial mo
 ## Architecture
 
 ```
-CRN (symbolic)
-    │
-    ▼  crn_to_tensor_repr()
-CRNTensorRepr  ──────────────────────────────────────────────────────────────────┐
-    │                                                                             │
-    ▼                                                                             │
-BipartiteGNNEncoder                                                               │
-  ├── SpeciesEmbedding    (concentration + learnable identity)                    │
-  ├── ReactionEmbedding   (propensity type embed + parameter projection)          │
-  └── L × MessagePassingLayer  (sum or attention-weighted)                        │
-        alternates rxn→species / species→rxn messages                            │
-        ▼                                                                         │
-    CRNContext  (species_embeddings, reaction_embeddings, context_vector)         │
-        │                                                                         │
-        ▼                                                                         │
-CRNNeuralSDE  (drift f and diffusion g, each a ConditionedMLP)                   │
-  dX = f(X,t; ctx) dt + g(X,t; ctx) dW                                          │
-        │                                                                         │
-        ▼                                                                         │
-EulerMaruyamaSolver  →  predicted Trajectory                                     │
-                                                                                  │
-                      Gillespie SSA  →  ground-truth Trajectory  ←───────────────┘
-                                            ▼
-                              GaussianTransitionNLL   (teacher forcing)
-                              CombinedTrajectoryLoss  (full rollout)
+CRN (symbolic)                     InputProtocol (experiment-level)
+    │                                       │
+    ▼  crn_to_tensor_repr()                 ▼
+CRNTensorRepr  ────────────────┐    ProtocolEncoder  (DeepSets over PulseEvents)
+    │                          │           │
+    ▼                          │           ▼
+BipartiteGNNEncoder            │    protocol_embedding  (d_protocol,)
+  ├── SpeciesEmbedding          │           │
+  │   (conc + identity +        │           │
+  │    is_external flag)        │           │
+  ├── ReactionEmbedding         │           │
+  └── L × MessagePassingLayer   │           │
+        ▼                       │           │
+    CRNContext  ────────────────┴───────────┘
+    (context_vector = mean-pool species + mean-pool reactions)
+        │  concatenated with protocol_embedding → [ctx ; proto]
+        ▼
+CRNNeuralSDE  (drift f and diffusion g, each a ConditionedMLP)
+  dX_int = f(X,t; [ctx;proto]) dt + g(X,t; [ctx;proto]) dW   ← internal species
+  X_ext  = InputProtocol.evaluate(t)                          ← external species (clamped)
+        │
+        ▼
+EulerMaruyamaSolver  →  predicted Trajectory
+                                    ▼
+              Gillespie SSA  →  ground-truth Trajectory
+                                    ▼
+                      GaussianTransitionNLL   (teacher forcing, masked to internal species)
+                      CombinedTrajectoryLoss  (full rollout)
 ```
 
 **Key design choices:**
@@ -40,6 +43,207 @@ EulerMaruyamaSolver  →  predicted Trajectory                                  
 - Edge features encode stoichiometric structure: `NET_CHANGE`, `IS_STOICHIOMETRIC`, `IS_DEPENDENCY`. The `IS_DEPENDENCY` flag distinguishes catalytic species (zero net stoichiometry but non-zero propensity influence) from stoichiometric participants.
 - The diffusion matrix has shape `(n_species, n_reactions)`, matching the Chemical Langevin Equation where each reaction drives one independent Wiener process.
 - Both drift and diffusion networks are `ConditionedMLP` instances: FiLM modulation is applied at every hidden layer (not just the output), so the network can compute context-dependent intermediate features. Depth is controlled by `SDEConfig.n_hidden_layers`.
+- External species (inputs) are separated from the CRN context. The `CRNContext` encodes CRN structure only; the `ProtocolEncoder` encodes the experimental protocol. The two are concatenated before conditioning the SDE, so the same trained model can be evaluated under any protocol without re-encoding the CRN.
+
+## External inputs
+
+External inputs model experimental protocols (microfluidic ligand pulses, optogenetic stimulation, chemical inducers) as pseudo-species whose dynamics are prescribed by a `PulseSchedule` rather than CRN kinetics. The same CRN trained once can be evaluated under any protocol at inference time.
+
+### Data structures
+
+**`PulseEvent`** — a single rectangular pulse active on `[t_start, t_end)`:
+
+```python
+from crn_surrogate.crn.inputs import PulseEvent
+
+event = PulseEvent(t_start=10.0, t_end=20.0, amplitude=15.0)
+```
+
+**`PulseSchedule`** — a sorted, non-overlapping sequence of `PulseEvent`s for one input species. Evaluates in O(log n) via bisect:
+
+```python
+from crn_surrogate.crn.inputs import PulseSchedule
+
+schedule = PulseSchedule(events=(event,), baseline=0.0)
+schedule.evaluate(12.0)  # → 15.0  (inside pulse)
+schedule.evaluate(25.0)  # → 0.0   (at baseline)
+```
+
+**`InputProtocol`** — maps global species indices to their `PulseSchedule`s. Represents the full experimental protocol for one simulation:
+
+```python
+from crn_surrogate.crn.inputs import InputProtocol
+
+protocol = InputProtocol(schedules={1: schedule})
+protocol.evaluate(12.0)  # → {1: 15.0}
+protocol.breakpoints()   # → sorted list of all pulse start/end times
+```
+
+`EMPTY_PROTOCOL` is a singleton for CRNs with no external inputs. It is the default value of `TrajectoryItem.input_protocol`.
+
+### Factory functions
+
+| Factory | Returns | Description |
+|---------|---------|-------------|
+| `single_pulse(t_start, t_end, amplitude)` | `PulseSchedule` | One rectangular pulse |
+| `repeated_pulse(period, duty_cycle, amplitude, n_pulses, t_start)` | `PulseSchedule` | Square wave with n repetitions |
+| `step_sequence(times, amplitudes)` | `PulseSchedule` | Staircase of constant levels (times = transition points, amplitudes = level per interval) |
+| `constant_input(amplitude, t_start, t_end)` | `PulseSchedule` | Constant input; `t_end=inf` means constant for the entire simulation |
+| `random_protocol(t_max, n_pulses_range, duration_range, amplitude_range, ...)` | `PulseSchedule` | Random pulse train |
+| `random_input_protocol(input_species_indices, t_max, ...)` | `InputProtocol` | Independent random protocols for multiple species |
+
+`single_pulse`, `repeated_pulse`, `step_sequence`, `constant_input`, and `random_protocol` return `PulseSchedule`; wrap in `InputProtocol(schedules={species_idx: schedule})` to use with the neural pipeline. `random_input_protocol` returns a complete `InputProtocol` directly.
+
+### CRN with external species
+
+Declare external (input-controlled) species when constructing a `CRN`. External species must have zero net stoichiometry across all reactions — they can only appear as propensity dependencies:
+
+```python
+from crn_surrogate.crn.crn import CRN
+from crn_surrogate.crn.reaction import Reaction
+from crn_surrogate.crn.propensities import hill, mass_action
+import torch
+
+# Species: A (index 0, internal), I (index 1, external inducer)
+crn = CRN(
+    reactions=[
+        Reaction(
+            stoichiometry=torch.tensor([1, 0]),  # I has zero net change
+            propensity=hill(v_max=5.0, k_m=10.0, hill_coefficient=2.0, species_index=1),
+            name="A production",
+        ),
+        Reaction(
+            stoichiometry=torch.tensor([-1, 0]),
+            propensity=mass_action(0.2, torch.tensor([1.0, 0.0])),
+            name="A degradation",
+        ),
+    ],
+    species_names=["A", "I"],
+    external_species=frozenset({1}),
+)
+
+crn.is_external   # → array([False, True])
+```
+
+`CRNTensorRepr.is_external` (a `(n_species,)` bool tensor) is derived automatically and passed to `SpeciesEmbedding`, where it adds a learned offset to the embeddings of external species.
+
+The `BipartiteGraphBuilder` automatically excludes edges whose species endpoint is external from the bipartite graph, since external species do not participate in CRN kinetics.
+
+### ProtocolEncoder
+
+A DeepSets encoder that maps a batch of `InputProtocol` objects to fixed-size embedding vectors. The same model handles protocols with any number of events or species.
+
+```python
+from crn_surrogate.encoder.protocol_encoder import ProtocolEncoder
+from crn_surrogate.configs.model_config import ProtocolEncoderConfig
+
+protocol_cfg = ProtocolEncoderConfig(
+    d_event=32,           # hidden dim of the per-event MLP
+    d_protocol=64,        # output embedding dimension
+    n_layers=2,           # hidden layers in the per-event MLP
+    max_input_species=16, # embedding table size for input species
+    species_embed_dim=8,  # per-species embedding dimension
+)
+encoder = ProtocolEncoder(protocol_cfg)
+
+# Encode a batch of protocols → (batch, d_protocol)
+emb = encoder([protocol_A, protocol_B, EMPTY_PROTOCOL])
+# EMPTY_PROTOCOL always encodes to exactly zero (not the projection bias)
+```
+
+**Per-event feature vector:** for each `PulseEvent` with local species index `k` (0-indexed by sorted rank among species present in the protocol):
+```
+[species_embedding(k), t_start, t_end, amplitude, log(amplitude), duration, midpoint]
+```
+
+**Architecture:** Linear(raw_dim → d_event) → SiLU → [Linear(d_event → d_event) → SiLU] × (n_layers−1) → masked sum-pool → Linear(d_event → d_protocol).
+
+The local species index mapping (global species 3, 7 → local 0, 1) is per-protocol and protocol-agnostic: the embedding learns "first input species", not a specific global identity. The GNN already encodes which global species connects where.
+
+### Using protocol conditioning in the neural SDE
+
+Set `SDEConfig.d_protocol > 0` (must match `ProtocolEncoderConfig.d_protocol`) to enable protocol conditioning. The protocol embedding is concatenated to the CRN context vector before each FiLM modulation step:
+
+```python
+from crn_surrogate.configs.model_config import SDEConfig, ProtocolEncoderConfig
+from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
+from crn_surrogate.crn.inputs import InputProtocol, single_pulse
+import torch
+
+D_PROTOCOL = 64
+sde_cfg = SDEConfig(d_model=32, d_protocol=D_PROTOCOL, n_noise_channels=crn.n_reactions)
+protocol_cfg = ProtocolEncoderConfig(d_protocol=D_PROTOCOL)
+
+sde = CRNNeuralSDE(sde_cfg, n_species=crn.n_species)
+protocol_encoder = ProtocolEncoder(protocol_cfg)
+solver = EulerMaruyamaSolver(sde_cfg)
+
+# Encode CRN once; encode protocol once per experiment
+crn_context = encoder(crn_repr, initial_state)
+protocol = InputProtocol(schedules={1: single_pulse(10.0, 20.0, 15.0)})
+protocol_emb = protocol_encoder([protocol])[0]  # (d_protocol,)
+
+external_mask = torch.tensor([s in crn.external_species for s in range(crn.n_species)])
+
+trajectory = solver.solve(
+    sde=sde,
+    initial_state=initial_state,
+    crn_context=crn_context,
+    t_span=torch.linspace(0.0, 30.0, 120),
+    dt=0.1,
+    protocol_embedding=protocol_emb,     # conditions drift/diffusion
+    input_protocol=protocol,             # clamps external species at each step
+    external_species_mask=external_mask, # required when input_protocol is set
+)
+```
+
+At each integration step, the solver:
+1. Clamps external species to `protocol.evaluate(t)` before computing drift/diffusion
+2. Applies Euler-Maruyama to internal species only
+3. Clips internal species to `>= 0` (if `clip_state=True`)
+4. Overwrites external species with `protocol.evaluate(t + dt)` on the new state
+
+When `d_protocol=0` (default), the SDE behaves identically to the pre-protocol version.
+
+### Loss masking for external species
+
+`GaussianTransitionNLL.compute` accepts an optional `mask` parameter restricting the species-dimension sum to internal species:
+
+```python
+from crn_surrogate.training.losses import GaussianTransitionNLL
+
+loss_fn = GaussianTransitionNLL()
+internal_mask = ~external_mask  # (n_species,) bool, True for internal
+
+loss = loss_fn.compute(
+    sde=sde,
+    crn_context=crn_context,
+    true_trajectory=ssa_traj,
+    times=times,
+    dt=0.1,
+    mask=internal_mask,
+    protocol_embedding=protocol_emb,
+)
+```
+
+When `mask=None` all species contribute to the loss.
+
+### Gillespie SSA with external inputs
+
+Pass an `InputProtocol` to `GillespieSSA.simulate`. The simulator partitions the simulation at protocol breakpoints, applies species overrides at each interval boundary, and records state at every breakpoint so that `interpolate_to_grid` accurately reflects input transitions:
+
+```python
+from crn_surrogate.simulation.gillespie import GillespieSSA
+
+ssa = GillespieSSA()
+traj = ssa.simulate(
+    crn=crn,
+    initial_state=initial_state,
+    t_max=30.0,
+    input_protocol=protocol,
+)
+```
 
 ## Install
 
@@ -86,6 +290,8 @@ See `notebooks/` for worked examples:
 
 - `notebooks/03a_encoder_comparison.ipynb` — sum vs. attentive message passing
 - `notebooks/03b_loss_comparison.ipynb` — `GaussianTransitionNLL` vs. `CombinedTrajectoryLoss`
+- `notebooks/05_external_inputs.ipynb` — pulse schedule visualization, Gillespie with external inputs
+- `notebooks/06_neural_sde_with_inputs.ipynb` — encoder invariance, protocol encoding, full forward pass
 
 ## CRN definitions
 
@@ -210,6 +416,8 @@ The pipeline saves a `list[TrajectoryItem]` to `dataset.pt`. Each item contains:
 | `motif_label` | `str` | Motif type string (e.g. `"birth_death"`) |
 | `cluster_id` | `int` | Integer cluster ID assigned by the pipeline |
 | `params` | `dict` | Kinetic parameters used to generate this CRN |
+| `input_protocol` | `InputProtocol` | Protocol applied during SSA simulation (defaults to `EMPTY_PROTOCOL`) |
+| `internal_species_mask` | `Tensor (n_species,) \| None` | Bool mask; True for internal species. Precomputed from `crn.is_external`. `None` means all species are internal. |
 
 Use `CRNTrajectoryDataset` and `CRNCollator` to load and batch:
 
@@ -416,34 +624,40 @@ Test suite covers: CRN construction and propensities, Gillespie SSA simulator, b
 ```
 src/crn_surrogate/
 ├── configs/
-│   ├── model_config.py       # EncoderConfig, SDEConfig, ModelConfig
+│   ├── model_config.py       # EncoderConfig, SDEConfig, ProtocolEncoderConfig, ModelConfig
 │   └── training_config.py    # TrainingConfig, TrainingMode, SchedulerType
 ├── crn/
-│   ├── crn.py                # CRN class (stoichiometry + propensities)
+│   ├── crn.py                # CRN class (stoichiometry + propensities + external_species)
 │   ├── reaction.py           # Reaction, PropensityFn protocol
 │   ├── propensities.py       # mass_action, hill, hill_repression,
 │   │                         #   hill_activation_repression, substrate_inhibition,
 │   │                         #   enzyme_michaelis_menten, constant_rate
+│   ├── inputs.py             # PulseEvent, PulseSchedule, InputProtocol, EMPTY_PROTOCOL;
+│   │                         #   single_pulse, repeated_pulse, step_sequence,
+│   │                         #   constant_input, random_protocol, random_input_protocol
 │   └── examples.py           # birth_death, lotka_volterra, schlogl, toggle_switch,
 │                             #   simple_mapk_cascade, birth_death_analytical,
 │                             #   lotka_volterra_analytical
 ├── simulation/
-│   ├── gillespie.py          # GillespieSSA (CRN-agnostic)
+│   ├── gillespie.py          # GillespieSSA (breakpoint-aware, supports InputProtocol)
 │   ├── interpolation.py      # interpolate_to_grid (zero-order hold)
 │   └── trajectory.py         # Trajectory dataclass
 ├── encoder/
 │   ├── tensor_repr.py        # crn_to_tensor_repr, tensor_repr_to_crn, CRNTensorRepr
-│   ├── graph_utils.py        # EdgeFeature, EDGE_FEAT_DIM, BipartiteEdges, build_bipartite_edges
-│   ├── embeddings.py         # SpeciesEmbedding, ReactionEmbedding
+│   ├── graph_utils.py        # EdgeFeature, EDGE_FEAT_DIM, BipartiteEdges,
+│   │                         #   BipartiteGraphBuilder (filters external-species edges)
+│   ├── embeddings.py         # SpeciesEmbedding (+ is_external flag), ReactionEmbedding
 │   ├── message_passing.py    # SumMessagePassingLayer, AttentiveMessagePassingLayer
-│   └── bipartite_gnn.py      # BipartiteGNNEncoder, CRNContext
+│   ├── bipartite_gnn.py      # BipartiteGNNEncoder, CRNContext
+│   └── protocol_encoder.py   # ProtocolEncoder (DeepSets over PulseEvents)
 ├── simulator/
 │   ├── film.py               # FiLMLayer (feature-wise linear modulation)
 │   ├── conditioned_mlp.py    # ConditionedMLP (MLP with per-layer FiLM conditioning)
-│   ├── neural_sde.py         # CRNNeuralSDE
-│   └── sde_solver.py         # EulerMaruyamaSolver
+│   ├── neural_sde.py         # CRNNeuralSDE (+ protocol_embedding parameter)
+│   └── sde_solver.py         # EulerMaruyamaSolver (+ external species clamping)
 ├── data/
-│   ├── dataset.py            # TrajectoryItem, CRNTrajectoryDataset, CRNCollator
+│   ├── dataset.py            # TrajectoryItem (+ input_protocol, internal_species_mask),
+│   │                         #   CRNTrajectoryDataset, CRNCollator
 │   └── generation/
 │       ├── configs.py        # SamplingConfig, CurationConfig, GenerationConfig
 │       ├── motif_type.py     # MotifType enum (8 elementary + COMPOSED)
@@ -464,8 +678,9 @@ src/crn_surrogate/
 │           ├── repressilator.py             # RepressilatorFactory
 │           └── substrate_inhibition_motif.py # SubstrateInhibitionMotifFactory
 ├── training/
-│   ├── losses.py             # GaussianTransitionNLL, MeanMatchingLoss,
-│   │                         #   VarianceMatchingLoss, CombinedTrajectoryLoss
+│   ├── losses.py             # GaussianTransitionNLL (+ mask, protocol_embedding),
+│   │                         #   MeanMatchingLoss, VarianceMatchingLoss,
+│   │                         #   CombinedTrajectoryLoss
 │   ├── trainer.py            # Trainer, TrainingResult
 │   └── profiler.py           # PhaseTimer, ProfileLogger, WandbLogger
 └── evaluation/
@@ -479,7 +694,9 @@ notebooks/
 ├── 02_training_data.ipynb         # Data generation and curation
 ├── 03a_encoder_comparison.ipynb   # Sum vs. attentive message passing
 ├── 03b_loss_comparison.ipynb      # GaussianTransitionNLL vs. CombinedTrajectoryLoss
-└── 04_data_generation.ipynb       # Full pipeline demo
+├── 04_data_generation.ipynb       # Full pipeline demo
+├── 05_external_inputs.ipynb       # PulseSchedule visualization, Gillespie with inputs
+└── 06_neural_sde_with_inputs.ipynb  # Protocol encoding, neural SDE forward pass demo
 ```
 
 ## License
