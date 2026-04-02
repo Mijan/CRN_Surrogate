@@ -7,6 +7,7 @@ from crn_surrogate.encoder.graph_utils import (
     BipartiteGraphBuilder,
     EdgeFeature,
 )
+from crn_surrogate.encoder.protocol_encoder import ProtocolEncoder
 from crn_surrogate.encoder.message_passing import (
     AttentiveMessagePassingLayer,
     SumMessagePassingLayer,
@@ -28,6 +29,7 @@ __all__ = [
     "EDGE_FEAT_DIM",
     "EdgeFeature",
     "PropensityType",
+    "ProtocolEncoder",
     "SumMessagePassingLayer",
     "crn_to_tensor_repr",
     "tensor_repr_to_crn",

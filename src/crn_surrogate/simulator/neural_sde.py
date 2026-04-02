@@ -28,7 +28,8 @@ class CRNNeuralSDE(nn.Module):
         super().__init__()
         self._config = config
         self._n_species = n_species
-        d_context = 2 * config.d_model  # species + reaction pool concatenated
+        # context = CRN pool (2 * d_model) + optional protocol embedding (d_protocol)
+        d_context = 2 * config.d_model + config.d_protocol
 
         self._drift_net = ConditionedMLP(
             d_in=n_species,
@@ -50,43 +51,51 @@ class CRNNeuralSDE(nn.Module):
         t: torch.Tensor,
         state: torch.Tensor,
         crn_context: CRNContext,
+        protocol_embedding: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute drift coefficient f(X, t; CRN embedding).
+        """Compute drift coefficient f(X, t; CRN embedding [; protocol embedding]).
 
         Args:
             t: Scalar time tensor.
             state: (n_species,) or (B, n_species) current state.
             crn_context: CRN encoder output.
+            protocol_embedding: Optional (d_protocol,) or (B, d_protocol) tensor
+                from ProtocolEncoder. When provided, concatenated to the CRN
+                context vector before conditioning.
 
         Returns:
             (n_species,) or (B, n_species) drift vector.
         """
-        # NOTE: t is accepted in the signature for interface compatibility with
-        # time-varying SDEs (e.g., optogenetic input protocols) but is currently
-        # unused. To add time dependence, concatenate a time embedding to the
-        # state input or add it to the context vector.
-        return self._drift_net(state, crn_context.context_vector)
+        ctx = crn_context.context_vector
+        if protocol_embedding is not None:
+            ctx = torch.cat([ctx, protocol_embedding], dim=-1)
+        return self._drift_net(state, ctx)
 
     def diffusion(
         self,
         t: torch.Tensor,
         state: torch.Tensor,
         crn_context: CRNContext,
+        protocol_embedding: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Compute diffusion coefficient g(X, t; CRN embedding).
+        """Compute diffusion coefficient g(X, t; CRN embedding [; protocol embedding]).
 
         Args:
             t: Scalar time tensor.
             state: (n_species,) or (B, n_species) current state.
             crn_context: CRN encoder output.
+            protocol_embedding: Optional (d_protocol,) or (B, d_protocol) tensor
+                from ProtocolEncoder. When provided, concatenated to the CRN
+                context vector before conditioning.
 
         Returns:
             (n_species, n_noise_channels) or (B, n_species, n_noise_channels),
             non-negative (softplus applied).
         """
-        # NOTE: t is accepted in the signature for interface compatibility with
-        # time-varying SDEs but is currently unused.
-        raw = self._diff_net(state, crn_context.context_vector)
+        ctx = crn_context.context_vector
+        if protocol_embedding is not None:
+            ctx = torch.cat([ctx, protocol_embedding], dim=-1)
+        raw = self._diff_net(state, ctx)
         raw = F.softplus(raw)
         n_noise = self._config.n_noise_channels
         if state.dim() == 1:

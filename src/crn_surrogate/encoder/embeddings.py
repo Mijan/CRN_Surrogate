@@ -22,12 +22,19 @@ class SpeciesEmbedding(nn.Module):
         self._config = config
         self._conc_proj = nn.Linear(1, config.d_model)
         self._identity_embed = nn.Embedding(config.max_species, config.d_model)
+        self._external_proj = nn.Linear(1, config.d_model)
 
-    def forward(self, initial_concentration: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        initial_concentration: torch.Tensor,
+        is_external: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """Embed species from their initial concentrations and positional identities.
 
         Args:
             initial_concentration: (n_species,) initial molecular counts.
+            is_external: (n_species,) boolean tensor; True for externally controlled
+                species. When provided, adds a learned projection of the flag.
 
         Returns:
             (n_species, d_model) embeddings.
@@ -38,7 +45,13 @@ class SpeciesEmbedding(nn.Module):
             initial_concentration.unsqueeze(-1)
         )  # (n_species, d_model)
         id_emb = self._identity_embed(indices)  # (n_species, d_model)
-        return conc_emb + id_emb
+        h = conc_emb + id_emb
+        if is_external is not None:
+            ext_emb = self._external_proj(
+                is_external.float().unsqueeze(-1)
+            )  # (n_species, d_model)
+            h = h + ext_emb
+        return h
 
 
 class ReactionEmbedding(nn.Module):

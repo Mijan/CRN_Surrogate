@@ -76,7 +76,7 @@ class BipartiteGNNEncoder(nn.Module):
         """
         edges: BipartiteEdges = crn_repr.bipartite_edges
 
-        h_species = self._species_embed(initial_state)
+        h_species = self._species_embed(initial_state, is_external=crn_repr.is_external)
         h_reactions = self._reaction_embed(
             crn_repr.propensity_type_ids,
             crn_repr.propensity_params,

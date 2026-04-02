@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
+from crn_surrogate.crn.inputs import EMPTY_PROTOCOL, InputProtocol
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 
 
@@ -31,6 +32,11 @@ class TrajectoryItem:
         cluster_id: Integer cluster / class identifier assigned during dataset curation.
             Defaults to -1 (unassigned).
         params: Raw kinetic parameter dict used to generate this CRN instance.
+        input_protocol: The InputProtocol used when simulating these trajectories.
+            Defaults to EMPTY_PROTOCOL for CRNs with no external inputs.
+        internal_species_mask: (n_species,) bool tensor; True for internal (non-external)
+            species. When None, all species are treated as internal. Precomputed from
+            crn.internal_species_mask at data generation time.
     """
 
     crn_repr: CRNTensorRepr
@@ -40,6 +46,8 @@ class TrajectoryItem:
     motif_label: str = ""
     cluster_id: int = -1
     params: dict = field(default_factory=dict)
+    input_protocol: InputProtocol = field(default_factory=lambda: EMPTY_PROTOCOL)
+    internal_species_mask: torch.Tensor | None = None  # (n_species,) bool
 
 
 class CRNTrajectoryDataset(Dataset):
@@ -82,16 +90,18 @@ class CRNCollator:
 
         Returns:
             Dict with keys:
-              stoichiometry:        (B, max_rxn, max_species)
-              dependency_matrix:    (B, max_rxn, max_species)
-              propensity_params:    (B, max_rxn, max_params)
-              propensity_type_ids:  (B, max_rxn) int
-              initial_states:       (B, max_species)
-              trajectories:         (B, M, T, max_species)
-              times:                (B, T)
-              species_mask:         (B, max_species) bool, True = valid
-              reaction_mask:        (B, max_rxn) bool, True = valid
-              cluster_ids:          (B,) int, -1 if unassigned
+              stoichiometry:           (B, max_rxn, max_species)
+              dependency_matrix:       (B, max_rxn, max_species)
+              propensity_params:       (B, max_rxn, max_params)
+              propensity_type_ids:     (B, max_rxn) int
+              initial_states:          (B, max_species)
+              trajectories:            (B, M, T, max_species)
+              times:                   (B, T)
+              species_mask:            (B, max_species) bool, True = valid
+              reaction_mask:           (B, max_rxn) bool, True = valid
+              cluster_ids:             (B,) int, -1 if unassigned
+              input_protocols:         list[InputProtocol] length B
+              internal_species_mask:   (B, max_species) bool or None
         """
         max_species = max(item.crn_repr.n_species for item in batch)
         max_rxn = max(item.crn_repr.n_reactions for item in batch)
@@ -111,6 +121,12 @@ class CRNCollator:
         reaction_mask = torch.zeros(B, max_rxn, dtype=torch.bool)
         cluster_ids = torch.full((B,), fill_value=-1, dtype=torch.long)
 
+        # Determine whether any item has a non-None internal_species_mask.
+        has_internal_mask = any(item.internal_species_mask is not None for item in batch)
+        internal_species_mask_batch = (
+            torch.zeros(B, max_species, dtype=torch.bool) if has_internal_mask else None
+        )
+
         for i, item in enumerate(batch):
             ns = item.crn_repr.n_species
             nr = item.crn_repr.n_reactions
@@ -126,6 +142,12 @@ class CRNCollator:
             species_mask[i, :ns] = True
             reaction_mask[i, :nr] = True
             cluster_ids[i] = item.cluster_id
+            if has_internal_mask:
+                if item.internal_species_mask is not None:
+                    internal_species_mask_batch[i, :ns] = item.internal_species_mask  # type: ignore[index]
+                else:
+                    # No mask provided: treat all real species as internal.
+                    internal_species_mask_batch[i, :ns] = True  # type: ignore[index]
 
         return {
             "stoichiometry": stoich,
@@ -138,4 +160,6 @@ class CRNCollator:
             "species_mask": species_mask,
             "reaction_mask": reaction_mask,
             "cluster_ids": cluster_ids,
+            "input_protocols": [item.input_protocol for item in batch],
+            "internal_species_mask": internal_species_mask_batch,
         }

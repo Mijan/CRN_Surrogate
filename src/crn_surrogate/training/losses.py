@@ -161,6 +161,7 @@ class GaussianTransitionNLL(nn.Module):
         times: torch.Tensor,
         dt: float,
         mask: torch.Tensor | None = None,
+        protocol_embedding: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute mean NLL over all transitions in the trajectory.
 
@@ -175,7 +176,9 @@ class GaussianTransitionNLL(nn.Module):
                 transitions from ALL M trajectories are used.
             times: (T,) time points corresponding to the trajectory.
             dt: Time step between consecutive observations.
-            mask: (n_species,) optional bool mask for valid species.
+            mask: (n_species,) optional bool mask; True = valid (internal) species.
+            protocol_embedding: Optional (d_protocol,) tensor from ProtocolEncoder,
+                passed to drift and diffusion for FiLM conditioning.
 
         Returns:
             Scalar mean NLL loss.
@@ -201,11 +204,15 @@ class GaussianTransitionNLL(nn.Module):
         )  # (M*(T-1), n_species)
         all_times = times[:-1].repeat(M)  # (M*(T-1),)
 
-        # Two batched forward passes instead of M*(T-1) individual ones
-        all_drift = sde.drift(all_times, all_y_t, crn_context)  # (M*(T-1), n_species)
-        all_G = sde.diffusion(
-            all_times, all_y_t, crn_context
-        )  # (M*(T-1), n_species, n_noise)
+        # Two batched forward passes instead of M*(T-1) individual ones.
+        # Pass protocol_embedding only when provided (preserves backward compatibility
+        # with SDE implementations that do not accept this argument).
+        if protocol_embedding is not None:
+            all_drift = sde.drift(all_times, all_y_t, crn_context, protocol_embedding)
+            all_G = sde.diffusion(all_times, all_y_t, crn_context, protocol_embedding)
+        else:
+            all_drift = sde.drift(all_times, all_y_t, crn_context)
+            all_G = sde.diffusion(all_times, all_y_t, crn_context)
 
         mu = all_y_t + all_drift * dt  # (M*(T-1), n_species)
         variance = (all_G**2).sum(dim=-1) * dt  # (M*(T-1), n_species)
