@@ -73,7 +73,11 @@ class GillespieSSA:
         states = [state.clone()]
 
         for _ in range(max_reactions):
-            a = propensity_fn(state, t).clamp(min=0.0)
+            a = (
+                propensity_fn(state, t)
+                .nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+                .clamp(min=0.0)
+            )
             a_total = a.sum()
             if a_total <= 0:
                 break
@@ -112,6 +116,8 @@ class GillespieSSA:
         try:
             a0 = propensity_fn(state, 0.0)
             a1 = propensity_fn(state, 1.0)
+            if not a0.isfinite().all() or not a1.isfinite().all():
+                return
             if not torch.allclose(a0, a1, atol=1e-6):
                 warnings.warn(
                     "The propensity function appears to be time-varying "

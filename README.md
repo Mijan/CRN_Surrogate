@@ -96,6 +96,9 @@ Supported propensity types (all serializable to/from flat tensors):
 | `ConstantRateParams` | `constant_rate(k)` | `a = k` |
 | `MassActionParams` | `mass_action(k, reactant_stoich)` | `a = k * ∏ Xᵢ^Rᵢ` |
 | `HillParams` | `hill(v_max, k_m, n, species_index)` | `a = V·Xₛⁿ / (Kⁿ + Xₛⁿ)` |
+| `HillRepressionParams` | `hill_repression(k_max, k_half, n, species_index)` | `a = k_max / (1 + (Xₛ/K)ⁿ)` |
+| `HillActivationRepressionParams` | `hill_activation_repression(k_max, k_act, n_act, act_idx, k_rep, n_rep, rep_idx)` | Sigmoid activation × sigmoid repression |
+| `SubstrateInhibitionParams` | `substrate_inhibition(v_max, k_m, k_i, species_index)` | `a = V·Xₛ / (Kₘ + Xₛ + Xₛ²/Kᵢ)` |
 | `EnzymeMichaelisMentenParams` | `enzyme_michaelis_menten(k_cat, k_m, enzyme_idx, substrate_idx)` | `a = k_cat·E·S / (Kₘ + S)` |
 
 Built-in example CRNs: `birth_death`, `lotka_volterra`, `schlogl`, `toggle_switch`, `simple_mapk_cascade`.
@@ -103,6 +106,120 @@ Built-in example CRNs: `birth_death`, `lotka_volterra`, `schlogl`, `toggle_switc
 Analytical reference functions for validation are available for `birth_death` and `lotka_volterra` via `birth_death_analytical(k_birth, k_death)` and `lotka_volterra_analytical(...)`, which return drift/diffusion callables and stationary moments.
 
 Custom propensities must be implemented as callable classes with `.params` (returning a registered `Params` dataclass) and `.species_dependencies` (returning `frozenset[int]`). Raw lambdas are not serializable.
+
+## Data generation
+
+The `crn_surrogate.data.generation` package provides a full pipeline for generating curated training datasets from CRN motifs.
+
+### Motif types
+
+Eight elementary motifs are supported, each with a typed `Params` dataclass and a factory class:
+
+| MotifType | Factory | Species | Reactions | Kinetics |
+|-----------|---------|---------|-----------|----------|
+| `BIRTH_DEATH` | `BirthDeathFactory` | 1 | 2 | Mass action + constant rate |
+| `AUTO_CATALYSIS` | `AutoCatalysisFactory` | 1 | 3 | Autocatalytic + degradation |
+| `NEGATIVE_AUTOREGULATION` | `NegativeAutoregulationFactory` | 2 | 4 | Hill repression self-regulation |
+| `TOGGLE_SWITCH` | `ToggleSwitchFactory` | 2 | 4 | Mutual Hill repression |
+| `ENZYMATIC_CATALYSIS` | `EnzymaticCatalysisFactory` | 3 | 4 | Michaelis-Menten |
+| `INCOHERENT_FEEDFORWARD` | `IncoherentFeedforwardFactory` | 3 | 5 | Hill activation + repression |
+| `REPRESSILATOR` | `RepressilatorFactory` | 3 | 6 | Cyclic Hill repression |
+| `SUBSTRATE_INHIBITION` | `SubstrateInhibitionMotifFactory` | 2 | 4 | Substrate inhibition kinetics |
+
+Motifs can be **composed** via `ComposedMotifFactory`, which merges two elementary CRNs by sharing a bridging species, expanding stoichiometry and remapping species indices.
+
+### Quick generation example
+
+```python
+from crn_surrogate.data.generation import (
+    DataGenerationPipeline,
+    GenerationConfig,
+    SamplingConfig,
+    CurationConfig,
+    default_tasks,
+)
+
+config = GenerationConfig(
+    sampling=SamplingConfig(n_rejection_samples=5),
+    curation=CurationConfig(),
+    output_dir="data_cache/dataset",
+    n_ssa_trajectories=32,
+    simulation_time=20.0,
+    n_timepoints=100,
+)
+
+pipeline = DataGenerationPipeline(config, tasks=default_tasks(target_per_motif=200))
+summary = pipeline.run()
+# Writes data_cache/dataset/dataset.pt and metadata.json
+```
+
+### Parameter sampling
+
+`ParameterSampler` draws kinetic parameters from ranges co-located in each `Params` dataclass using `param_field(low, high, log_uniform=True)`. No separate range configuration is needed. Rejection sampling calls `factory.validate_params()` to discard invalid configurations.
+
+### Curation
+
+`ViabilityFilter` applies six criteria to the (M, T, n_species) SSA ensemble:
+
+| Criterion | Description |
+|-----------|-------------|
+| NaN/Inf check | Rejects any trajectory containing non-finite values |
+| Blowup check | Rejects if any species exceeds `blowup_threshold` |
+| Stuck-at-zero | Rejects if all species are zero for the entire simulation |
+| Low activity | Rejects if mean molecule count is below `min_mean_molecules` |
+| Low CV | Rejects if coefficient of variation is below `min_cv` (no interesting dynamics) |
+| Unbounded final | Rejects if mean final state exceeds `max_final_mean` |
+
+### Generation tasks
+
+```python
+from crn_surrogate.data.generation import (
+    GenerationTask,
+    all_elementary_tasks,
+    default_tasks,
+    get_factory,
+    MotifType,
+)
+
+# All 8 elementary motifs, 100 items each
+tasks = all_elementary_tasks(target=100)
+
+# Default mix: 8 elementary + composed variants
+tasks = default_tasks(target_per_motif=200)
+
+# Custom task
+tasks = [
+    GenerationTask(
+        factory=get_factory(MotifType.REPRESSILATOR),
+        target=500,
+        label="repressilator",
+    )
+]
+```
+
+### Dataset format
+
+The pipeline saves a `list[TrajectoryItem]` to `dataset.pt`. Each item contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `crn_repr` | `CRNTensorRepr` | Tensor representation for the encoder |
+| `initial_state` | `Tensor (n_species,)` | Initial molecule counts |
+| `trajectories` | `Tensor (M, T, n_species)` | SSA ensemble on the time grid |
+| `times` | `Tensor (T,)` | Shared time grid |
+| `motif_label` | `str` | Motif type string (e.g. `"birth_death"`) |
+| `cluster_id` | `int` | Integer cluster ID assigned by the pipeline |
+| `params` | `dict` | Kinetic parameters used to generate this CRN |
+
+Use `CRNTrajectoryDataset` and `CRNCollator` to load and batch:
+
+```python
+from crn_surrogate.data import CRNTrajectoryDataset, CRNCollator
+from torch.utils.data import DataLoader
+
+dataset = CRNTrajectoryDataset.from_file("data_cache/dataset/dataset.pt")
+loader = DataLoader(dataset, batch_size=16, collate_fn=CRNCollator())
+```
 
 ## Training
 
@@ -292,7 +409,7 @@ pytest
 pytest -m "not slow"   # skip GPU / timing benchmarks
 ```
 
-Test suite covers: CRN construction and propensities, Gillespie SSA simulator, bipartite graph utilities, all encoder components (embeddings, message-passing layers, full encoder), `FiLMLayer`, `ConditionedMLP`, neural SDE (drift/diffusion shapes, non-negativity, gradient flow), configs, loss functions (NLL correctness vs reference loop, gradient flow, masking, speedup), dataset collation, trainer, profiler, and an end-to-end integration test.
+Test suite covers: CRN construction and propensities, Gillespie SSA simulator, bipartite graph utilities, all encoder components (embeddings, message-passing layers, full encoder), `FiLMLayer`, `ConditionedMLP`, neural SDE (drift/diffusion shapes, non-negativity, gradient flow), configs, loss functions (NLL correctness vs reference loop, gradient flow, masking, speedup), dataset collation, trainer, profiler, data generation pipeline (motif factories, parameter sampling, curation, composer, pipeline integration), and an end-to-end integration test.
 
 ## Project structure
 
@@ -304,7 +421,9 @@ src/crn_surrogate/
 ├── crn/
 │   ├── crn.py                # CRN class (stoichiometry + propensities)
 │   ├── reaction.py           # Reaction, PropensityFn protocol
-│   ├── propensities.py       # mass_action, hill, enzyme_michaelis_menten, constant_rate
+│   ├── propensities.py       # mass_action, hill, hill_repression,
+│   │                         #   hill_activation_repression, substrate_inhibition,
+│   │                         #   enzyme_michaelis_menten, constant_rate
 │   └── examples.py           # birth_death, lotka_volterra, schlogl, toggle_switch,
 │                             #   simple_mapk_cascade, birth_death_analytical,
 │                             #   lotka_volterra_analytical
@@ -324,7 +443,26 @@ src/crn_surrogate/
 │   ├── neural_sde.py         # CRNNeuralSDE
 │   └── sde_solver.py         # EulerMaruyamaSolver
 ├── data/
-│   └── dataset.py            # TrajectoryItem, CRNTrajectoryDataset, CRNCollator
+│   ├── dataset.py            # TrajectoryItem, CRNTrajectoryDataset, CRNCollator
+│   └── generation/
+│       ├── configs.py        # SamplingConfig, CurationConfig, GenerationConfig
+│       ├── motif_type.py     # MotifType enum (8 elementary + COMPOSED)
+│       ├── motif_registry.py # get_factory() registry lookup
+│       ├── task.py           # GenerationTask, all_elementary_tasks, default_tasks
+│       ├── parameter_sampling.py  # ParameterSampler (log-uniform + rejection sampling)
+│       ├── curation.py       # ViabilityFilter, CurationResult (6 criteria)
+│       ├── composer.py       # CRNComposer, ComposedMotifFactory, CompositionSpec
+│       ├── pipeline.py       # DataGenerationPipeline, DatasetSummary, MotifResult
+│       └── motifs/
+│           ├── base.py                      # MotifParams, MotifFactory, param_field
+│           ├── birth_death.py               # BirthDeathFactory, BirthDeathParams
+│           ├── auto_catalysis.py            # AutoCatalysisFactory, AutoCatalysisParams
+│           ├── negative_autoregulation.py   # NegativeAutoregulationFactory
+│           ├── toggle_switch.py             # ToggleSwitchFactory
+│           ├── enzymatic_catalysis.py       # EnzymaticCatalysisFactory
+│           ├── feedforward_loop.py          # IncoherentFeedforwardFactory
+│           ├── repressilator.py             # RepressilatorFactory
+│           └── substrate_inhibition_motif.py # SubstrateInhibitionMotifFactory
 ├── training/
 │   ├── losses.py             # GaussianTransitionNLL, MeanMatchingLoss,
 │   │                         #   VarianceMatchingLoss, CombinedTrajectoryLoss
@@ -337,9 +475,11 @@ src/crn_surrogate/
     └── trajectory.py         # TrajectoryComparator
 tests/
 notebooks/
-├── 03a_encoder_comparison.ipynb   # sum vs. attentive message passing
+├── 01_simulation.ipynb            # Gillespie SSA walkthrough
+├── 02_training_data.ipynb         # Data generation and curation
+├── 03a_encoder_comparison.ipynb   # Sum vs. attentive message passing
 ├── 03b_loss_comparison.ipynb      # GaussianTransitionNLL vs. CombinedTrajectoryLoss
-└── archive/
+└── 04_data_generation.ipynb       # Full pipeline demo
 ```
 
 ## License

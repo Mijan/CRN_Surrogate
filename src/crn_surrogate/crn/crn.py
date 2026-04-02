@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Sequence
 
 import torch
@@ -95,8 +96,6 @@ class CRN:
         propensity does not declare dependencies, all species are assumed to
         be dependencies and a warning is issued.
         """
-        import warnings
-
         rows = []
         for rxn in self._reactions:
             prop = rxn.propensity

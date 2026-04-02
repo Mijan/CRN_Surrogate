@@ -15,6 +15,28 @@ import torch
 
 from crn_surrogate.crn.reaction import PropensityFn
 
+__all__ = [
+    # Parameter dataclasses
+    "ConstantRateParams",
+    "EnzymeMichaelisMentenParams",
+    "HillActivationRepressionParams",
+    "HillParams",
+    "HillRepressionParams",
+    "MassActionParams",
+    "SubstrateInhibitionParams",
+    # Factory functions
+    "constant_rate",
+    "enzyme_michaelis_menten",
+    "hill",
+    "hill_activation_repression",
+    "hill_repression",
+    "mass_action",
+    "substrate_inhibition",
+    # Protocols
+    "PropensityParams",
+    "SerializablePropensity",
+]
+
 # ── Parameter dataclasses ─────────────────────────────────────────────────────
 
 
@@ -232,6 +254,25 @@ class _MassActionClosure:
             if r != 0.0
         )
 
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with reactant_stoichiometry expanded to n_merged length.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Total species count in the merged CRN.
+
+        Returns:
+            New mass-action propensity with updated stoichiometry vector.
+        """
+        new_rs = torch.zeros(n_merged)
+        for old_idx, order in enumerate(self._reactant_stoichiometry.tolist()):
+            if order != 0.0:
+                new_idx = index_map.get(old_idx, old_idx)
+                new_rs[new_idx] = order
+        return mass_action(self._params.rate_constant, new_rs)
+
     def __repr__(self) -> str:
         return f"MassAction(k={self._params.rate_constant})"
 
@@ -245,9 +286,10 @@ class _HillClosure:
     def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
         p = self._params
         x = state[p.species_index].clamp(min=0.0)
-        x_n = torch.pow(x, p.hill_coefficient)
-        k_n = p.k_m**p.hill_coefficient
-        return p.v_max * x_n / (k_n + x_n + 1e-8)
+        # (x/K)^n / (1 + (x/K)^n) = sigmoid(n * log(x/K))
+        # Using sigmoid avoids float overflow for large hill_coefficient.
+        log_ratio = torch.log((x + 1e-10) / (p.k_m + 1e-8))
+        return p.v_max * torch.sigmoid(p.hill_coefficient * log_ratio)
 
     @property
     def params(self) -> HillParams:
@@ -258,6 +300,26 @@ class _HillClosure:
     def species_dependencies(self) -> frozenset[int]:
         """Index of the species driving this Hill propensity."""
         return frozenset({self._params.species_index})
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with species_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored (Hill propensity uses a scalar species index).
+
+        Returns:
+            New Hill propensity with updated species index.
+        """
+        new_idx = index_map.get(self._params.species_index, self._params.species_index)
+        return hill(
+            self._params.v_max,
+            self._params.k_m,
+            self._params.hill_coefficient,
+            new_idx,
+        )
 
     def __repr__(self) -> str:
         return (
@@ -284,6 +346,20 @@ class _ConstantRateClosure:
     def species_dependencies(self) -> frozenset[int]:
         """No species influence a constant-rate propensity."""
         return frozenset()
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return self — constant propensity has no species dependencies.
+
+        Args:
+            index_map: Ignored.
+            n_merged: Ignored.
+
+        Returns:
+            Self (no-op).
+        """
+        return self
 
     def __repr__(self) -> str:
         return f"ConstantRate(k={self._params.rate})"
@@ -316,6 +392,23 @@ class _EnzymeMichaelisMentenClosure:
     def species_dependencies(self) -> frozenset[int]:
         """Enzyme and substrate both influence this propensity."""
         return self._species_dependencies
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with enzyme_index and substrate_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New enzyme-MM propensity with updated species indices.
+        """
+        p = self._params
+        new_enz = index_map.get(p.enzyme_index, p.enzyme_index)
+        new_sub = index_map.get(p.substrate_index, p.substrate_index)
+        return enzyme_michaelis_menten(p.k_cat, p.k_m, new_enz, new_sub)
 
     def __repr__(self) -> str:
         p = self._params
@@ -422,6 +515,437 @@ def enzyme_michaelis_menten(
             k_m=k_m,
             enzyme_index=enzyme_index,
             substrate_index=substrate_index,
+        )
+    )
+
+
+# ── Hill repression propensity ────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class HillRepressionParams:
+    """Named parameters for Hill-type repression kinetics.
+
+    a(X, t) = k_max / (1 + (X_s / K_half)^n)
+
+    Attributes:
+        k_max: Maximum (unrepressed) rate.
+        k_half: Half-saturation constant K_half.
+        hill_coefficient: Hill exponent n.
+        species_index: Index of the repressing species.
+    """
+
+    k_max: float
+    k_half: float
+    hill_coefficient: float
+    species_index: int
+
+    def to_tensor(self, max_params: int = 8) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [k_max, k_half, hill_coefficient, species_index, 0, 0, 0, 0].
+
+        Args:
+            max_params: Length of the output tensor (must be >= 4).
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.k_max
+        t[1] = self.k_half
+        t[2] = self.hill_coefficient
+        t[3] = self.species_index
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "HillRepressionParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with layout [k_max, k_half, hill_coefficient, species_index].
+
+        Returns:
+            HillRepressionParams instance.
+        """
+        return cls(
+            k_max=params[0].item(),
+            k_half=params[1].item(),
+            hill_coefficient=params[2].item(),
+            species_index=int(params[3].item()),
+        )
+
+
+@dataclass(frozen=True)
+class HillActivationRepressionParams:
+    """Named parameters for combined Hill activation-repression kinetics.
+
+    a(X, t) = k_max * (X_act/K_act)^n_act / (1 + (X_act/K_act)^n_act) * 1 / (1 + (X_rep/K_rep)^n_rep)
+
+    Attributes:
+        k_max: Maximum rate.
+        k_act: Half-saturation constant for the activator.
+        n_act: Hill coefficient for activation.
+        activator_index: Index of the activating species.
+        k_rep: Half-saturation constant for the repressor.
+        n_rep: Hill coefficient for repression.
+        repressor_index: Index of the repressing species.
+    """
+
+    k_max: float
+    k_act: float
+    n_act: float
+    activator_index: int
+    k_rep: float
+    n_rep: float
+    repressor_index: int
+
+    def to_tensor(self, max_params: int = 8) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [k_max, k_act, n_act, activator_index, k_rep, n_rep, repressor_index, 0].
+
+        Args:
+            max_params: Length of the output tensor (must be >= 7).
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.k_max
+        t[1] = self.k_act
+        t[2] = self.n_act
+        t[3] = self.activator_index
+        t[4] = self.k_rep
+        t[5] = self.n_rep
+        t[6] = self.repressor_index
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "HillActivationRepressionParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with layout
+                [k_max, k_act, n_act, activator_index, k_rep, n_rep, repressor_index, 0].
+
+        Returns:
+            HillActivationRepressionParams instance.
+        """
+        return cls(
+            k_max=params[0].item(),
+            k_act=params[1].item(),
+            n_act=params[2].item(),
+            activator_index=int(params[3].item()),
+            k_rep=params[4].item(),
+            n_rep=params[5].item(),
+            repressor_index=int(params[6].item()),
+        )
+
+
+@dataclass(frozen=True)
+class SubstrateInhibitionParams:
+    """Named parameters for substrate-inhibition kinetics.
+
+    a(X, t) = V_max * X_s / (K_m + X_s + X_s^2 / K_i)
+
+    Attributes:
+        v_max: Maximum rate V_max.
+        k_m: Michaelis constant K_m.
+        k_i: Inhibition constant K_i.
+        species_index: Index of the substrate species.
+    """
+
+    v_max: float
+    k_m: float
+    k_i: float
+    species_index: int
+
+    def to_tensor(self, max_params: int = 8) -> torch.Tensor:
+        """Serialize to a flat tensor of length max_params.
+
+        Layout: [v_max, k_m, k_i, species_index, 0, 0, 0, 0].
+
+        Args:
+            max_params: Length of the output tensor (must be >= 4).
+
+        Returns:
+            Flat parameter tensor.
+        """
+        t = torch.zeros(max_params)
+        t[0] = self.v_max
+        t[1] = self.k_m
+        t[2] = self.k_i
+        t[3] = self.species_index
+        return t
+
+    @classmethod
+    def from_tensor(cls, params: torch.Tensor) -> "SubstrateInhibitionParams":
+        """Reconstruct from flat parameter tensor.
+
+        Args:
+            params: Flat tensor with layout [v_max, k_m, k_i, species_index].
+
+        Returns:
+            SubstrateInhibitionParams instance.
+        """
+        return cls(
+            v_max=params[0].item(),
+            k_m=params[1].item(),
+            k_i=params[2].item(),
+            species_index=int(params[3].item()),
+        )
+
+
+class _HillRepressionClosure:
+    """Callable Hill repression propensity: a(X,t) = k_max / (1 + (X_s / K_half)^n)."""
+
+    def __init__(self, params: HillRepressionParams) -> None:
+        self._params = params
+
+    def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
+        p = self._params
+        x = state[p.species_index].clamp(min=0.0)
+        # 1 / (1 + (x/K)^n) = sigmoid(-n * log(x/K))
+        # Using sigmoid avoids float overflow for large hill_coefficient.
+        log_ratio = torch.log((x + 1e-10) / (p.k_half + 1e-8))
+        return torch.tensor(p.k_max) * torch.sigmoid(-p.hill_coefficient * log_ratio)
+
+    @property
+    def params(self) -> HillRepressionParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Index of the repressing species."""
+        return frozenset({self._params.species_index})
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with species_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New Hill repression propensity with updated species index.
+        """
+        p = self._params
+        new_idx = index_map.get(p.species_index, p.species_index)
+        return hill_repression(p.k_max, p.k_half, p.hill_coefficient, new_idx)
+
+    def __repr__(self) -> str:
+        p = self._params
+        return (
+            f"HillRepression(k_max={p.k_max}, k_half={p.k_half}, "
+            f"n={p.hill_coefficient}, s={p.species_index})"
+        )
+
+
+class _HillActivationRepressionClosure:
+    """Combined Hill activation-repression propensity.
+
+    a(X, t) = k_max * (X_act/K_act)^n_act / (1 + (X_act/K_act)^n_act)
+              * 1 / (1 + (X_rep/K_rep)^n_rep)
+    """
+
+    def __init__(self, params: HillActivationRepressionParams) -> None:
+        self._params = params
+        self._species_dependencies = frozenset(
+            {params.activator_index, params.repressor_index}
+        )
+
+    def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
+        p = self._params
+        x_act = state[p.activator_index].clamp(min=0.0)
+        x_rep = state[p.repressor_index].clamp(min=0.0)
+        # Each factor is a sigmoid in log-space, stable for large Hill exponents.
+        log_act = torch.log((x_act + 1e-10) / (p.k_act + 1e-8))
+        log_rep = torch.log((x_rep + 1e-10) / (p.k_rep + 1e-8))
+        activation = torch.sigmoid(p.n_act * log_act)
+        repression = torch.sigmoid(-p.n_rep * log_rep)
+        return torch.tensor(p.k_max) * activation * repression
+
+    @property
+    def params(self) -> HillActivationRepressionParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Activator and repressor both influence this propensity."""
+        return self._species_dependencies
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with activator_index and repressor_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New activation-repression propensity with updated species indices.
+        """
+        p = self._params
+        new_act = index_map.get(p.activator_index, p.activator_index)
+        new_rep = index_map.get(p.repressor_index, p.repressor_index)
+        return hill_activation_repression(
+            p.k_max, p.k_act, p.n_act, new_act, p.k_rep, p.n_rep, new_rep
+        )
+
+    def __repr__(self) -> str:
+        p = self._params
+        return (
+            f"HillActRep(k_max={p.k_max}, act={p.activator_index}, "
+            f"rep={p.repressor_index})"
+        )
+
+
+class _SubstrateInhibitionClosure:
+    """Callable substrate-inhibition propensity.
+
+    a(X, t) = V_max * X_s / (K_m + X_s + X_s^2 / K_i)
+    """
+
+    def __init__(self, params: SubstrateInhibitionParams) -> None:
+        self._params = params
+
+    def __call__(self, state: torch.Tensor, t: float) -> torch.Tensor:
+        p = self._params
+        x = state[p.species_index].clamp(min=0.0)
+        denominator = p.k_m + x + x**2 / (p.k_i + 1e-8) + 1e-8
+        return torch.tensor(p.v_max) * x / denominator
+
+    @property
+    def params(self) -> SubstrateInhibitionParams:
+        """Inspectable parameter dataclass."""
+        return self._params
+
+    @property
+    def species_dependencies(self) -> frozenset[int]:
+        """Index of the substrate species."""
+        return frozenset({self._params.species_index})
+
+    def reindex_species(
+        self, index_map: dict[int, int], n_merged: int
+    ) -> "PropensityFn":
+        """Return a copy with species_index remapped.
+
+        Args:
+            index_map: Maps old species index to new species index.
+            n_merged: Ignored.
+
+        Returns:
+            New substrate-inhibition propensity with updated species index.
+        """
+        p = self._params
+        new_idx = index_map.get(p.species_index, p.species_index)
+        return substrate_inhibition(p.v_max, p.k_m, p.k_i, new_idx)
+
+    def __repr__(self) -> str:
+        p = self._params
+        return (
+            f"SubstrateInhibition(V_max={p.v_max}, K_m={p.k_m}, "
+            f"K_i={p.k_i}, s={p.species_index})"
+        )
+
+
+def hill_repression(
+    k_max: float,
+    k_half: float,
+    hill_coefficient: float,
+    species_index: int,
+) -> PropensityFn:
+    """Create a Hill repression propensity: a(X,t) = k_max / (1 + (X_s / K_half)^n).
+
+    Args:
+        k_max: Maximum (unrepressed) rate.
+        k_half: Half-saturation constant K_half.
+        hill_coefficient: Hill exponent n.
+        species_index: Index of the repressing species.
+
+    Returns:
+        Callable (state, t) -> scalar propensity.
+    """
+    return _HillRepressionClosure(
+        HillRepressionParams(
+            k_max=k_max,
+            k_half=k_half,
+            hill_coefficient=hill_coefficient,
+            species_index=species_index,
+        )
+    )
+
+
+def hill_activation_repression(
+    k_max: float,
+    k_act: float,
+    n_act: float,
+    activator_index: int,
+    k_rep: float,
+    n_rep: float,
+    repressor_index: int,
+) -> PropensityFn:
+    """Create a combined Hill activation-repression propensity.
+
+    a(X, t) = k_max * (X_act/K_act)^n_act / (1 + (X_act/K_act)^n_act)
+              * 1 / (1 + (X_rep/K_rep)^n_rep)
+
+    Args:
+        k_max: Maximum rate.
+        k_act: Half-saturation constant for the activator.
+        n_act: Hill coefficient for activation.
+        activator_index: Index of the activating species.
+        k_rep: Half-saturation constant for the repressor.
+        n_rep: Hill coefficient for repression.
+        repressor_index: Index of the repressing species.
+
+    Returns:
+        Callable (state, t) -> scalar propensity.
+    """
+    return _HillActivationRepressionClosure(
+        HillActivationRepressionParams(
+            k_max=k_max,
+            k_act=k_act,
+            n_act=n_act,
+            activator_index=activator_index,
+            k_rep=k_rep,
+            n_rep=n_rep,
+            repressor_index=repressor_index,
+        )
+    )
+
+
+def substrate_inhibition(
+    v_max: float,
+    k_m: float,
+    k_i: float,
+    species_index: int,
+) -> PropensityFn:
+    """Create a substrate-inhibition propensity.
+
+    a(X, t) = V_max * X_s / (K_m + X_s + X_s^2 / K_i)
+
+    Args:
+        v_max: Maximum rate V_max.
+        k_m: Michaelis constant K_m.
+        k_i: Inhibition constant K_i.
+        species_index: Index of the substrate species.
+
+    Returns:
+        Callable (state, t) -> scalar propensity.
+    """
+    return _SubstrateInhibitionClosure(
+        SubstrateInhibitionParams(
+            v_max=v_max,
+            k_m=k_m,
+            k_i=k_i,
+            species_index=species_index,
         )
     )
 

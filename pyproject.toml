@@ -30,6 +30,9 @@ fallback_version = "0.0.0"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-vv"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [tool.mypy]
 python_version = "3.11"
