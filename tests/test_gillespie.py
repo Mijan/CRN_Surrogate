@@ -197,5 +197,5 @@ def test_gillespie_max_reactions_cap_stops_simulation_early():
         t_max=1000.0,
         max_reactions=10,
     )
-    # +1 for the initial state recorded before any reaction fires
-    assert traj.times.shape[0] <= 11
+    # +1 for the initial state, +1 for the final t_max entry appended by Fix 1
+    assert traj.times.shape[0] <= 12

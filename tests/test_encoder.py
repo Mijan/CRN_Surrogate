@@ -22,8 +22,8 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.embeddings import ReactionEmbedding, SpeciesEmbedding
 from crn_surrogate.encoder.graph_utils import (
     EDGE_FEAT_DIM,
+    BipartiteGraphBuilder,
     EdgeFeature,
-    build_bipartite_edges,
 )
 from crn_surrogate.encoder.message_passing import (
     AttentiveMessagePassingLayer,
@@ -132,10 +132,12 @@ def test_edge_feature_enum_has_expected_channels():
     assert EdgeFeature.IS_DEPENDENCY == 2
 
 
-def test_build_bipartite_edges_feat_dim_matches_edge_feat_dim():
-    """build_bipartite_edges must produce feature vectors of width EDGE_FEAT_DIM."""
+def test_bipartite_graph_builder_feat_dim_matches_edge_feat_dim():
+    """BipartiteGraphBuilder must produce feature vectors of width EDGE_FEAT_DIM."""
     crn = birth_death()
-    edges = build_bipartite_edges(crn.stoichiometry_matrix, crn.dependency_matrix)
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
     assert edges.rxn_to_species_feat.shape[1] == EDGE_FEAT_DIM
     assert edges.edge_feat_dim == EDGE_FEAT_DIM
 
@@ -148,7 +150,9 @@ def test_sum_layer_output_shapes_birth_death():
     d_model = 16
     layer = SumMessagePassingLayer(d_model)
     crn = birth_death()
-    edges = build_bipartite_edges(crn.stoichiometry_matrix, crn.dependency_matrix)
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
 
     h_species = torch.randn(crn.n_species, d_model)
     h_reactions = torch.randn(crn.n_reactions, d_model)
@@ -166,7 +170,9 @@ def test_attentive_layer_output_shapes_birth_death():
     d_model = 16
     layer = AttentiveMessagePassingLayer(d_model)
     crn = birth_death()
-    edges = build_bipartite_edges(crn.stoichiometry_matrix, crn.dependency_matrix)
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
 
     h_species = torch.randn(crn.n_species, d_model)
     h_reactions = torch.randn(crn.n_reactions, d_model)
@@ -208,7 +214,9 @@ def test_attentive_layer_gradients_flow():
     d_model = 16
     layer = AttentiveMessagePassingLayer(d_model)
     crn = birth_death()
-    edges = build_bipartite_edges(crn.stoichiometry_matrix, crn.dependency_matrix)
+    edges = BipartiteGraphBuilder(
+        crn.stoichiometry_matrix, crn.dependency_matrix
+    ).build()
 
     h_species = torch.randn(crn.n_species, d_model, requires_grad=True)
     h_reactions = torch.randn(crn.n_reactions, d_model, requires_grad=True)
@@ -261,7 +269,7 @@ def test_encoder_with_attention_gradients_flow():
 # ── Catalytic species edge flags ───────────────────────────────────────────────
 
 
-def test_build_bipartite_edges_catalytic_species_has_dependency_not_stoichiometric():
+def test_bipartite_graph_builder_catalytic_species_has_dependency_not_stoichiometric():
     """A catalytic enzyme has IS_STOICHIOMETRIC=0, IS_DEPENDENCY=1.
 
     Uses a minimal 2-species CRN: enzyme (idx 0) catalyses substrate (idx 1)
@@ -274,7 +282,7 @@ def test_build_bipartite_edges_catalytic_species_has_dependency_not_stoichiometr
         [[1.0, 1.0]]
     )  # both enzyme and substrate are dependencies
 
-    edges = build_bipartite_edges(stoichiometry, dep_matrix)
+    edges = BipartiteGraphBuilder(stoichiometry, dep_matrix).build()
 
     # Locate the enzyme edge (rxn 0 → species 0)
     rxn_idx = edges.rxn_to_species_index[0]

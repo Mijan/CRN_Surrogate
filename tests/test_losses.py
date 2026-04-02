@@ -62,6 +62,20 @@ def test_mean_matching_loss_mask():
     assert loss_masked.item() != loss_full.item()
 
 
+def test_mean_matching_loss_mask_normalizes_over_masked_species_only():
+    """Loss with mask equals MSE computed only on the masked species."""
+    pred, true = _make_tensors(n=3, seed=42)
+    mask = torch.tensor([True, False, True])
+    loss_masked = MeanMatchingLoss().compute(pred, true, mask=mask)
+
+    pred_mean = pred.mean(dim=0)  # (T, 3)
+    true_mean = true.mean(dim=0)
+    diff_masked = (pred_mean - true_mean)[:, mask]  # (T, 2)
+    expected = (diff_masked**2).mean()
+
+    torch.testing.assert_close(loss_masked, expected)
+
+
 def test_mean_matching_loss_gradient_flows():
     pred = torch.randn(4, 10, 2, requires_grad=True)
     true = torch.randn(8, 10, 2)
@@ -113,6 +127,24 @@ def test_variance_matching_loss_gradient_flows():
     loss = VarianceMatchingLoss().compute(pred, true)
     loss.backward()
     assert pred.grad is not None
+
+
+def test_variance_matching_loss_mask_normalizes_over_masked_species_only():
+    """Loss with mask equals variance MSE computed only on the masked species."""
+    torch.manual_seed(7)
+    pred = torch.randn(4, 10, 3)
+    true = torch.randn(8, 10, 3)
+    mask = torch.tensor([True, False, True])
+    loss_masked = VarianceMatchingLoss().compute(pred, true, mask=mask)
+
+    pred_var = pred.var(dim=0, correction=1)  # (T, 3)
+    true_var = true.var(dim=0, correction=1)
+    true_mean = true.mean(dim=0)
+    scale = true_mean[:, mask].abs().mean().clamp(min=1.0) ** 2
+    diff_masked = (pred_var - true_var)[:, mask]  # (T, 2)
+    expected = (diff_masked**2).mean() / scale
+
+    torch.testing.assert_close(loss_masked, expected)
 
 
 # ── CombinedTrajectoryLoss ───────────────────────────────────────────────────
@@ -304,4 +336,86 @@ def test_gaussian_nll_batched_is_faster(sde_and_ctx):
     assert speedup >= 5.0, (
         f"Expected >= 5× speedup, got {speedup:.1f}×  "
         f"(batched={elapsed_batched:.3f}s, loop={elapsed_loop:.3f}s)"
+    )
+
+
+# ── Phase 2: protocol embedding in GaussianTransitionNLL ──────────────────────
+
+
+def _make_nll_sde_and_ctx(n_species: int = 2, d_protocol: int = 0):
+    from crn_surrogate.configs.model_config import EncoderConfig
+    from crn_surrogate.crn.examples import lotka_volterra
+    from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
+    from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
+
+    crn = lotka_volterra()
+    enc = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=1))
+    crn_repr = crn_to_tensor_repr(crn)
+    ctx = enc(crn_repr, torch.zeros(n_species))
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
+        n_species=n_species,
+    )
+    return sde, ctx
+
+
+def test_gaussian_nll_with_no_protocol_embedding_unchanged():
+    """GaussianTransitionNLL with protocol_embedding=None behaves as before."""
+    sde, ctx = _make_nll_sde_and_ctx(n_species=2, d_protocol=0)
+    traj = torch.randn(3, 10, 2)
+    times = torch.linspace(0, 1, 10)
+    loss_fn = GaussianTransitionNLL()
+    loss = loss_fn.compute(sde, ctx, traj, times, dt=0.1)
+    assert loss.shape == ()
+    assert loss.isfinite()
+
+
+def test_gaussian_nll_with_protocol_embedding_changes_value():
+    """Different protocol embeddings passed via ResolvedProtocol give different loss values."""
+    from crn_surrogate.crn import EMPTY_PROTOCOL, ResolvedProtocol
+
+    d_protocol = 16
+    sde, ctx = _make_nll_sde_and_ctx(n_species=2, d_protocol=d_protocol)
+    traj = torch.randn(3, 10, 2)
+    times = torch.linspace(0, 1, 10)
+    loss_fn = GaussianTransitionNLL()
+
+    ext_mask = torch.zeros(2, dtype=torch.bool)
+    emb_a = torch.zeros(d_protocol)
+    emb_b = torch.randn(d_protocol)
+
+    resolved_a = ResolvedProtocol(
+        protocol=EMPTY_PROTOCOL, embedding=emb_a, external_species_mask=ext_mask
+    )
+    resolved_b = ResolvedProtocol(
+        protocol=EMPTY_PROTOCOL, embedding=emb_b, external_species_mask=ext_mask
+    )
+
+    loss_a = loss_fn.compute(
+        sde, ctx, traj, times, dt=0.1, resolved_protocol=resolved_a
+    )
+    loss_b = loss_fn.compute(
+        sde, ctx, traj, times, dt=0.1, resolved_protocol=resolved_b
+    )
+    assert not torch.isclose(loss_a, loss_b), (
+        "Different protocol embeddings should give different NLL"
+    )
+
+
+def test_gaussian_nll_internal_mask_reduces_loss_when_species_is_wrong():
+    """Masking out a species whose prediction is deliberately wrong reduces loss."""
+    sde, ctx = _make_nll_sde_and_ctx(n_species=2, d_protocol=0)
+    traj = torch.zeros(4, 10, 2)
+    times = torch.linspace(0, 1, 10)
+    loss_fn = GaussianTransitionNLL()
+
+    # Make species 1 hard to predict by setting its ground truth to a huge value.
+    traj[:, 1:, 1] = 1e6
+
+    loss_all = loss_fn.compute(sde, ctx, traj, times, dt=0.1)
+    # Mask out species 1 (only species 0 contributes).
+    mask = torch.tensor([True, False])
+    loss_masked = loss_fn.compute(sde, ctx, traj, times, dt=0.1, mask=mask)
+    assert loss_masked.item() < loss_all.item(), (
+        "Masking the bad species should reduce the loss"
     )

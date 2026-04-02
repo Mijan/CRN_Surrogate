@@ -141,3 +141,146 @@ def test_solver_gradients_flow_through_trajectory_to_sde_parameters():
     assert any(p.grad is not None for p in sde.parameters()), (
         "No gradients reached SDE parameters"
     )
+
+
+# ── Phase 2: protocol embedding ────────────────────────────────────────────────
+
+
+def test_sde_with_d_protocol_zero_behaves_identically():
+    """d_protocol=0 (default): drift/diffusion shapes match pre-Phase-2."""
+    ctx = _make_context(birth_death())
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=0),
+        n_species=1,
+    )
+    state = torch.tensor([5.0])
+    drift = sde.drift(torch.tensor(0.0), state, ctx)
+    diff = sde.diffusion(torch.tensor(0.0), state, ctx)
+    assert drift.shape == (1,)
+    assert diff.shape == (1, 4)
+
+
+def test_sde_with_d_protocol_positive_accepts_embedding():
+    """d_protocol>0: drift/diffusion work with protocol_embedding provided."""
+    d_protocol = 32
+    ctx = _make_context(birth_death(), d_model=16)
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
+        n_species=1,
+    )
+    state = torch.tensor([5.0])
+    proto_emb = torch.zeros(d_protocol)
+
+    drift = sde.drift(torch.tensor(0.0), state, ctx, protocol_embedding=proto_emb)
+    diff = sde.diffusion(torch.tensor(0.0), state, ctx, protocol_embedding=proto_emb)
+    assert drift.shape == (1,)
+    assert diff.shape == (1, 4)
+
+
+def test_sde_different_protocol_embeddings_produce_different_outputs():
+    """Same CRN context, different protocol embeddings must give different drift."""
+    d_protocol = 16
+    ctx = _make_context(birth_death(), d_model=16)
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
+        n_species=1,
+    )
+    state = torch.tensor([5.0])
+    emb_a = torch.randn(d_protocol)
+    emb_b = torch.randn(d_protocol)
+
+    drift_a = sde.drift(torch.tensor(0.0), state, ctx, protocol_embedding=emb_a)
+    drift_b = sde.drift(torch.tensor(0.0), state, ctx, protocol_embedding=emb_b)
+    assert not torch.allclose(drift_a, drift_b)
+
+
+def test_solver_with_no_protocol_matches_pre_phase2():
+    """EulerMaruyamaSolver with no protocol args produces trajectory of correct shape."""
+    ctx = _make_context(birth_death())
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
+    )
+    solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
+    t_span = torch.linspace(0.0, 5.0, 20)
+    traj = solver.solve(sde, torch.tensor([0.0]), ctx, t_span, dt=0.1)
+    assert traj.states.shape == (20, 1)
+
+
+def test_solver_with_input_protocol_clamps_external_species():
+    """Solver with a ResolvedProtocol writes correct values for external species."""
+    from crn_surrogate.crn import (
+        CRN,
+        InputProtocol,
+        Reaction,
+        ResolvedProtocol,
+        single_pulse,
+    )
+    from crn_surrogate.crn.propensities import mass_action
+    from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
+
+    # 2 species: A (internal), I (external)
+    crn = CRN(
+        reactions=[
+            Reaction(
+                stoichiometry=torch.tensor([1.0, 0.0]),
+                propensity=mass_action(0.5, torch.tensor([0.0, 1.0])),
+            ),
+            Reaction(
+                stoichiometry=torch.tensor([-1.0, 0.0]),
+                propensity=mass_action(0.3, torch.tensor([1.0, 0.0])),
+            ),
+        ],
+        species_names=["A", "I"],
+        external_species=frozenset({1}),
+    )
+    crn_repr = crn_to_tensor_repr(crn)
+    encoder = __import__(
+        "crn_surrogate.encoder.bipartite_gnn", fromlist=["BipartiteGNNEncoder"]
+    ).BipartiteGNNEncoder(
+        __import__(
+            "crn_surrogate.configs.model_config", fromlist=["EncoderConfig"]
+        ).EncoderConfig(d_model=16, n_layers=1)
+    )
+    ctx = encoder(crn_repr, torch.tensor([0.0, 0.0]))
+
+    t_on, amp = 2.0, 50.0
+    sched = single_pulse(t_start=t_on, t_end=10.0, amplitude=amp)
+    protocol = InputProtocol(schedules={1: sched})
+    ext_mask = torch.tensor([False, True])
+
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=2
+    )
+    solver = EulerMaruyamaSolver(SDEConfig(d_model=16, clip_state=True))
+    t_span = torch.linspace(0.0, 10.0, 50)
+    resolved = ResolvedProtocol(
+        protocol=protocol,
+        embedding=torch.zeros(0),
+        external_species_mask=ext_mask,
+    )
+    traj = solver.solve(
+        sde,
+        torch.tensor([0.0, 0.0]),
+        ctx,
+        t_span,
+        dt=0.05,
+        resolved_protocol=resolved,
+    )
+
+    # After t_on, external species should equal the amplitude
+    after_mask = t_span > t_on + 0.1
+    assert (traj.states[after_mask, 1].abs() - amp).abs().max().item() < 1e-4
+
+
+def test_solver_with_resolved_protocol_none_works():
+    """EulerMaruyamaSolver with resolved_protocol=None produces a trajectory normally."""
+    ctx = _make_context(birth_death())
+    sde = CRNNeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
+    )
+    solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
+    t_span = torch.linspace(0, 5, 10)
+    traj = solver.solve(
+        sde, torch.tensor([0.0]), ctx, t_span, dt=0.1, resolved_protocol=None
+    )
+    assert traj.states.shape == (10, 1)

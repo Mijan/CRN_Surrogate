@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 if TYPE_CHECKING:
+    from crn_surrogate.crn.inputs import ResolvedProtocol
     from crn_surrogate.encoder.bipartite_gnn import CRNContext
     from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 
@@ -76,7 +77,7 @@ class MeanMatchingLoss(TrajectoryLoss):
         true_mean = true_states.mean(dim=0)  # (T, n_species)
         diff = pred_mean - true_mean
         if mask is not None:
-            diff = diff * mask.float()
+            diff = diff[..., mask]
         return (diff**2).mean()
 
 
@@ -123,11 +124,12 @@ class VarianceMatchingLoss(TrajectoryLoss):
         pred_var = pred_states.var(dim=0, correction=1)  # (T, n_species)
         true_var = true_states.var(dim=0, correction=1)  # (T, n_species)
         true_mean = true_states.mean(dim=0)
-        scale = true_mean.abs().mean().clamp(min=1.0) ** 2
+        true_mean_for_scale = true_mean[..., mask] if mask is not None else true_mean
+        scale = true_mean_for_scale.abs().mean().clamp(min=1.0) ** 2
 
         diff = pred_var - true_var
         if mask is not None:
-            diff = diff * mask.float()
+            diff = diff[..., mask]
         return (diff**2).mean() / scale
 
 
@@ -161,6 +163,7 @@ class GaussianTransitionNLL(nn.Module):
         times: torch.Tensor,
         dt: float,
         mask: torch.Tensor | None = None,
+        resolved_protocol: ResolvedProtocol | None = None,
     ) -> torch.Tensor:
         """Compute mean NLL over all transitions in the trajectory.
 
@@ -175,7 +178,10 @@ class GaussianTransitionNLL(nn.Module):
                 transitions from ALL M trajectories are used.
             times: (T,) time points corresponding to the trajectory.
             dt: Time step between consecutive observations.
-            mask: (n_species,) optional bool mask for valid species.
+            mask: (n_species,) optional bool mask; True = valid (internal) species.
+            resolved_protocol: Optional bundle containing the protocol embedding
+                for FiLM conditioning. Only the embedding field is used here;
+                species clamping is the solver's responsibility.
 
         Returns:
             Scalar mean NLL loss.
@@ -183,6 +189,10 @@ class GaussianTransitionNLL(nn.Module):
         Raises:
             ValueError: If T < 2 (no transitions to evaluate).
         """
+        protocol_embedding = (
+            resolved_protocol.embedding if resolved_protocol is not None else None
+        )
+
         if true_trajectory.dim() == 2:
             true_trajectory = true_trajectory.unsqueeze(0)  # (1, T, n_species)
 
@@ -201,11 +211,13 @@ class GaussianTransitionNLL(nn.Module):
         )  # (M*(T-1), n_species)
         all_times = times[:-1].repeat(M)  # (M*(T-1),)
 
-        # Two batched forward passes instead of M*(T-1) individual ones
-        all_drift = sde.drift(all_times, all_y_t, crn_context)  # (M*(T-1), n_species)
-        all_G = sde.diffusion(
-            all_times, all_y_t, crn_context
-        )  # (M*(T-1), n_species, n_noise)
+        # Two batched forward passes instead of M*(T-1) individual ones.
+        if protocol_embedding is not None:
+            all_drift = sde.drift(all_times, all_y_t, crn_context, protocol_embedding)
+            all_G = sde.diffusion(all_times, all_y_t, crn_context, protocol_embedding)
+        else:
+            all_drift = sde.drift(all_times, all_y_t, crn_context)
+            all_G = sde.diffusion(all_times, all_y_t, crn_context)
 
         mu = all_y_t + all_drift * dt  # (M*(T-1), n_species)
         variance = (all_G**2).sum(dim=-1) * dt  # (M*(T-1), n_species)
