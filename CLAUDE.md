@@ -164,6 +164,16 @@ must be told.
 - Never silently squeeze, unsqueeze, or reshape tensors to make shapes
   match. If the input has the wrong number of dimensions, raise a clear error
   stating the expected and actual shapes.
+- When dispatching on a capability via `hasattr` or `Protocol`, the
+  fallback branch (the object lacks the capability) must raise a clear
+  error if the operation cannot produce correct results without the
+  capability. A silent fallback that returns a plausible but incorrect
+  result is worse than a crash. Example: if composition requires
+  reindexing propensity species references and a propensity type lacks
+  `reindex_species()`, raise TypeError rather than returning the
+  un-reindexed propensity. The only acceptable silent fallback is when
+  the fallback behaviour is provably correct (e.g., a propensity with
+  no species dependency needs no reindexing).
 
 ### Parameters belong inside closures, not alongside them
 
