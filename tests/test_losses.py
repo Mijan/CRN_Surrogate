@@ -384,11 +384,19 @@ def test_gaussian_nll_with_protocol_embedding_changes_value():
     emb_a = torch.zeros(d_protocol)
     emb_b = torch.randn(d_protocol)
 
-    resolved_a = ResolvedProtocol(protocol=EMPTY_PROTOCOL, embedding=emb_a, external_species_mask=ext_mask)
-    resolved_b = ResolvedProtocol(protocol=EMPTY_PROTOCOL, embedding=emb_b, external_species_mask=ext_mask)
+    resolved_a = ResolvedProtocol(
+        protocol=EMPTY_PROTOCOL, embedding=emb_a, external_species_mask=ext_mask
+    )
+    resolved_b = ResolvedProtocol(
+        protocol=EMPTY_PROTOCOL, embedding=emb_b, external_species_mask=ext_mask
+    )
 
-    loss_a = loss_fn.compute(sde, ctx, traj, times, dt=0.1, resolved_protocol=resolved_a)
-    loss_b = loss_fn.compute(sde, ctx, traj, times, dt=0.1, resolved_protocol=resolved_b)
+    loss_a = loss_fn.compute(
+        sde, ctx, traj, times, dt=0.1, resolved_protocol=resolved_a
+    )
+    loss_b = loss_fn.compute(
+        sde, ctx, traj, times, dt=0.1, resolved_protocol=resolved_b
+    )
     assert not torch.isclose(loss_a, loss_b), (
         "Different protocol embeddings should give different NLL"
     )

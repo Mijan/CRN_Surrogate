@@ -208,7 +208,13 @@ def test_solver_with_no_protocol_matches_pre_phase2():
 
 def test_solver_with_input_protocol_clamps_external_species():
     """Solver with a ResolvedProtocol writes correct values for external species."""
-    from crn_surrogate.crn import CRN, InputProtocol, ResolvedProtocol, Reaction, single_pulse
+    from crn_surrogate.crn import (
+        CRN,
+        InputProtocol,
+        Reaction,
+        ResolvedProtocol,
+        single_pulse,
+    )
     from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 
@@ -274,5 +280,7 @@ def test_solver_with_resolved_protocol_none_works():
     )
     solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
     t_span = torch.linspace(0, 5, 10)
-    traj = solver.solve(sde, torch.tensor([0.0]), ctx, t_span, dt=0.1, resolved_protocol=None)
+    traj = solver.solve(
+        sde, torch.tensor([0.0]), ctx, t_span, dt=0.1, resolved_protocol=None
+    )
     assert traj.states.shape == (10, 1)

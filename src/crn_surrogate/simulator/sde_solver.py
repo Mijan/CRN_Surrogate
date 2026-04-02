@@ -50,10 +50,8 @@ class EulerMaruyamaSolver:
         Returns:
             Trajectory with states recorded at t_span time points.
         """
-        protocol_embedding = resolved_protocol.embedding if resolved_protocol is not None else None
-        input_protocol = resolved_protocol.protocol if resolved_protocol is not None else None
-        external_species_mask = (
-            resolved_protocol.external_species_mask if resolved_protocol is not None else None
+        input_protocol = (
+            resolved_protocol.protocol if resolved_protocol is not None else None
         )
 
         t_start = t_span[0].item()
@@ -110,10 +108,16 @@ class EulerMaruyamaSolver:
         External species are overwritten from the protocol before computing drift
         and diffusion, ensuring the SDE always sees the correct input values.
         """
-        protocol_embedding = resolved_protocol.embedding if resolved_protocol is not None else None
-        input_protocol = resolved_protocol.protocol if resolved_protocol is not None else None
+        protocol_embedding = (
+            resolved_protocol.embedding if resolved_protocol is not None else None
+        )
+        input_protocol = (
+            resolved_protocol.protocol if resolved_protocol is not None else None
+        )
         external_species_mask = (
-            resolved_protocol.external_species_mask if resolved_protocol is not None else None
+            resolved_protocol.external_species_mask
+            if resolved_protocol is not None
+            else None
         )
 
         # 1. Set clamped species BEFORE computing drift/diffusion.
