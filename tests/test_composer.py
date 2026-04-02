@@ -232,7 +232,11 @@ def test_composed_propensities_reference_correct_merged_indices(
 ) -> None:
     """After composition with remapping, downstream propensities use merged species indices."""
     from crn_surrogate.crn.crn import CRN
-    from crn_surrogate.crn.propensities import MassActionParams, constant_rate, mass_action
+    from crn_surrogate.crn.propensities import (
+        MassActionParams,
+        constant_rate,
+        mass_action,
+    )
     from crn_surrogate.crn.reaction import Reaction
 
     # upstream: species "X" at index 0
