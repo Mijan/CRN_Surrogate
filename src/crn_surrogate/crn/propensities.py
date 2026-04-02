@@ -15,6 +15,28 @@ import torch
 
 from crn_surrogate.crn.reaction import PropensityFn
 
+__all__ = [
+    # Parameter dataclasses
+    "ConstantRateParams",
+    "EnzymeMichaelisMentenParams",
+    "HillActivationRepressionParams",
+    "HillParams",
+    "HillRepressionParams",
+    "MassActionParams",
+    "SubstrateInhibitionParams",
+    # Factory functions
+    "constant_rate",
+    "enzyme_michaelis_menten",
+    "hill",
+    "hill_activation_repression",
+    "hill_repression",
+    "mass_action",
+    "substrate_inhibition",
+    # Protocols
+    "PropensityParams",
+    "SerializablePropensity",
+]
+
 # ── Parameter dataclasses ─────────────────────────────────────────────────────
 
 

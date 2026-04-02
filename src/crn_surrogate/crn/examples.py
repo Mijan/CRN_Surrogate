@@ -13,6 +13,16 @@ from collections.abc import Callable
 
 import torch
 
+__all__ = [
+    "birth_death",
+    "birth_death_analytical",
+    "lotka_volterra",
+    "lotka_volterra_analytical",
+    "schlogl",
+    "simple_mapk_cascade",
+    "toggle_switch",
+]
+
 from crn_surrogate.crn.crn import CRN
 from crn_surrogate.crn.propensities import (
     constant_rate,
