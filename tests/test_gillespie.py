@@ -158,7 +158,9 @@ def test_interpolate_to_grid_grid_point_at_exact_event_time():
     """A grid point coinciding with an event returns that event's state."""
     event_times = torch.tensor([0.0, 2.0, 4.0])
     event_states = torch.tensor([[5.0], [10.0], [15.0]])
-    result = TimegridUtils.interpolate_to_grid(event_times, event_states, torch.tensor([2.0]))
+    result = TimegridUtils.interpolate_to_grid(
+        event_times, event_states, torch.tensor([2.0])
+    )
     assert result[0, 0].item() == pytest.approx(10.0)
 
 

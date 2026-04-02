@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import torch
 
-class TimegridUtils:
 
+class TimegridUtils:
     @staticmethod
     def interpolate_to_grid(
         event_times: torch.Tensor,
