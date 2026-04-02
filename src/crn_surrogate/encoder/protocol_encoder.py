@@ -135,25 +135,41 @@ class ProtocolEncoder(nn.Module):
             empty_mask = torch.zeros(B, 0, dtype=torch.bool, device=device)
             return empty, empty_mask
 
-        features = torch.zeros(B, max_events, raw_dim, device=device)
-        mask = torch.zeros(B, max_events, dtype=torch.bool, device=device)
+        # Collect all events across the entire batch into flat lists.
+        all_local_k: list[int] = []
+        all_scalars: list[list[float]] = []
+        event_batch_idx: list[int] = []
+        event_position: list[int] = []
 
         for i, item_events in enumerate(all_items):
             for j, (local_k, t_start, t_end, amplitude) in enumerate(item_events):
                 duration = t_end - t_start
                 midpoint = (t_start + t_end) / 2.0
-                log_amp = math.log(amplitude)
-
-                species_emb = self._species_embed(
-                    torch.tensor(local_k, device=device)
-                )  # (species_embed_dim,)
-
-                scalars = torch.tensor(
-                    [t_start, t_end, amplitude, log_amp, duration, midpoint],
-                    dtype=torch.float32,
-                    device=device,
+                all_local_k.append(local_k)
+                all_scalars.append(
+                    [t_start, t_end, amplitude, math.log(amplitude), duration, midpoint]
                 )
-                features[i, j] = torch.cat([species_emb, scalars], dim=0)
-                mask[i, j] = True
+                event_batch_idx.append(i)
+                event_position.append(j)
+
+        features = torch.zeros(B, max_events, raw_dim, device=device)
+        mask = torch.zeros(B, max_events, dtype=torch.bool, device=device)
+
+        if all_local_k:
+            # Single batched embedding lookup for all events.
+            species_embs = self._species_embed(
+                torch.tensor(all_local_k, dtype=torch.long, device=device)
+            )  # (total_events, species_embed_dim)
+            scalar_tensor = torch.tensor(
+                all_scalars, dtype=torch.float32, device=device
+            )  # (total_events, 6)
+            all_features = torch.cat([species_embs, scalar_tensor], dim=-1)
+
+            # Scatter into the padded tensor.
+            for flat_idx in range(len(all_local_k)):
+                bi = event_batch_idx[flat_idx]
+                pos = event_position[flat_idx]
+                features[bi, pos] = all_features[flat_idx]
+                mask[bi, pos] = True
 
         return features, mask

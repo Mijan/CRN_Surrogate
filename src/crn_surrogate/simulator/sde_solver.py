@@ -10,7 +10,7 @@ from crn_surrogate.simulation.trajectory import Trajectory
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 
 if TYPE_CHECKING:
-    from crn_surrogate.crn.inputs import InputProtocol
+    from crn_surrogate.crn.inputs import ResolvedProtocol
 
 
 class EulerMaruyamaSolver:
@@ -32,9 +32,7 @@ class EulerMaruyamaSolver:
         crn_context: CRNContext,
         t_span: torch.Tensor,
         dt: float,
-        protocol_embedding: torch.Tensor | None = None,
-        input_protocol: InputProtocol | None = None,
-        external_species_mask: torch.Tensor | None = None,
+        resolved_protocol: ResolvedProtocol | None = None,
     ) -> Trajectory:
         """Integrate the neural SDE forward in time.
 
@@ -44,23 +42,19 @@ class EulerMaruyamaSolver:
             crn_context: CRN encoder output for conditioning.
             t_span: (T,) time points at which to record the state.
             dt: Integration step size.
-            protocol_embedding: Optional (d_protocol,) tensor from ProtocolEncoder,
-                passed to drift and diffusion for FiLM conditioning.
-            input_protocol: Optional InputProtocol. When provided, external species
-                values are overwritten at each step from the protocol schedule.
-            external_species_mask: (n_species,) boolean tensor, True for external
-                species. Required when input_protocol is not None.
+            resolved_protocol: Optional bundle of the InputProtocol, its
+                pre-computed protocol embedding, and the external species mask.
+                When provided, external species are clamped at each step and
+                the embedding conditions the SDE drift/diffusion via FiLM.
 
         Returns:
             Trajectory with states recorded at t_span time points.
-
-        Raises:
-            ValueError: If input_protocol is provided without external_species_mask.
         """
-        if input_protocol is not None and external_species_mask is None:
-            raise ValueError(
-                "external_species_mask is required when input_protocol is provided"
-            )
+        protocol_embedding = resolved_protocol.embedding if resolved_protocol is not None else None
+        input_protocol = resolved_protocol.protocol if resolved_protocol is not None else None
+        external_species_mask = (
+            resolved_protocol.external_species_mask if resolved_protocol is not None else None
+        )
 
         t_start = t_span[0].item()
         t_end = t_span[-1].item()
@@ -91,9 +85,7 @@ class EulerMaruyamaSolver:
                 t,
                 dt,
                 crn_context,
-                protocol_embedding=protocol_embedding,
-                input_protocol=input_protocol,
-                external_species_mask=external_species_mask,
+                resolved_protocol=resolved_protocol,
             )
 
         # Capture any remaining t_span points.
@@ -111,15 +103,19 @@ class EulerMaruyamaSolver:
         t: torch.Tensor,
         dt: float,
         crn_context: CRNContext,
-        protocol_embedding: torch.Tensor | None = None,
-        input_protocol: InputProtocol | None = None,
-        external_species_mask: torch.Tensor | None = None,
+        resolved_protocol: ResolvedProtocol | None = None,
     ) -> torch.Tensor:
         """Single Euler-Maruyama step with optional external input clamping.
 
         External species are overwritten from the protocol before computing drift
         and diffusion, ensuring the SDE always sees the correct input values.
         """
+        protocol_embedding = resolved_protocol.embedding if resolved_protocol is not None else None
+        input_protocol = resolved_protocol.protocol if resolved_protocol is not None else None
+        external_species_mask = (
+            resolved_protocol.external_species_mask if resolved_protocol is not None else None
+        )
+
         # 1. Set clamped species BEFORE computing drift/diffusion.
         if input_protocol is not None:
             for idx, value in input_protocol.evaluate(t.item()).items():

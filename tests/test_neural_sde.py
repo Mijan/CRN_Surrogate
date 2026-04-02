@@ -207,8 +207,8 @@ def test_solver_with_no_protocol_matches_pre_phase2():
 
 
 def test_solver_with_input_protocol_clamps_external_species():
-    """Solver with an InputProtocol writes correct values for external species."""
-    from crn_surrogate.crn import CRN, InputProtocol, Reaction, single_pulse
+    """Solver with a ResolvedProtocol writes correct values for external species."""
+    from crn_surrogate.crn import CRN, InputProtocol, ResolvedProtocol, Reaction, single_pulse
     from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 
@@ -247,14 +247,18 @@ def test_solver_with_input_protocol_clamps_external_species():
     )
     solver = EulerMaruyamaSolver(SDEConfig(d_model=16, clip_state=True))
     t_span = torch.linspace(0.0, 10.0, 50)
+    resolved = ResolvedProtocol(
+        protocol=protocol,
+        embedding=torch.zeros(0),
+        external_species_mask=ext_mask,
+    )
     traj = solver.solve(
         sde,
         torch.tensor([0.0, 0.0]),
         ctx,
         t_span,
         dt=0.05,
-        input_protocol=protocol,
-        external_species_mask=ext_mask,
+        resolved_protocol=resolved,
     )
 
     # After t_on, external species should equal the amplitude
@@ -262,25 +266,13 @@ def test_solver_with_input_protocol_clamps_external_species():
     assert (traj.states[after_mask, 1].abs() - amp).abs().max().item() < 1e-4
 
 
-def test_solver_raises_without_external_mask_when_protocol_provided():
-    """EulerMaruyamaSolver must raise if input_protocol given without external_species_mask."""
-    from crn_surrogate.crn import InputProtocol, single_pulse
-
+def test_solver_with_resolved_protocol_none_works():
+    """EulerMaruyamaSolver with resolved_protocol=None produces a trajectory normally."""
     ctx = _make_context(birth_death())
     sde = CRNNeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
     )
     solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
-    protocol = InputProtocol(schedules={0: single_pulse(1.0, 5.0, 10.0)})
-
-    import pytest
-
-    with pytest.raises(ValueError, match="external_species_mask"):
-        solver.solve(
-            sde,
-            torch.tensor([0.0]),
-            ctx,
-            torch.linspace(0, 5, 10),
-            dt=0.1,
-            input_protocol=protocol,
-        )
+    t_span = torch.linspace(0, 5, 10)
+    traj = solver.solve(sde, torch.tensor([0.0]), ctx, t_span, dt=0.1, resolved_protocol=None)
+    assert traj.states.shape == (10, 1)

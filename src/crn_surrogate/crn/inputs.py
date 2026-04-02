@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 import numpy as np
+import torch
 
 __all__ = [
     # Data structures
@@ -24,6 +25,7 @@ __all__ = [
     "PulseSchedule",
     "InputProtocol",
     "EMPTY_PROTOCOL",
+    "ResolvedProtocol",
     # Factories
     "constant_input",
     "single_pulse",
@@ -458,3 +460,27 @@ def random_input_protocol(
         for idx in input_species_indices
     }
     return InputProtocol(schedules=schedules)
+
+
+# ── ResolvedProtocol ──────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ResolvedProtocol:
+    """An InputProtocol bundled with its pre-computed neural encoding.
+
+    Ties together the three objects that the EulerMaruyamaSolver needs for
+    protocol-aware integration. Constructing a single ResolvedProtocol
+    guarantees that the symbolic protocol (for clamping species values),
+    the learned embedding (for FiLM conditioning), and the species mask
+    (for selective clipping) all refer to the same experiment.
+
+    Attributes:
+        protocol: The symbolic pulse schedule for clamping external species.
+        embedding: (d_protocol,) tensor from ProtocolEncoder.
+        external_species_mask: (n_species,) boolean tensor, True for external species.
+    """
+
+    protocol: InputProtocol
+    embedding: torch.Tensor
+    external_species_mask: torch.Tensor

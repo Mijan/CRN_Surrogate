@@ -87,6 +87,7 @@ class SDEConfig:
         d_hidden: int = 128,
         n_hidden_layers: int = 2,
         clip_state: bool = True,
+        d_protocol: int = 0,
     ) -> "SDEConfig":
         """Create SDEConfig with n_noise_channels = crn.n_reactions.
 
@@ -99,6 +100,7 @@ class SDEConfig:
             d_hidden: Hidden dimension inside the drift/diffusion ConditionedMLPs.
             n_hidden_layers: Number of FiLM-conditioned hidden layers per network.
             clip_state: Whether to clamp state to [0, ∞) after each step.
+            d_protocol: Protocol encoder output dim; 0 means no protocol conditioning.
 
         Returns:
             SDEConfig with n_noise_channels set to crn.n_reactions.
@@ -109,6 +111,7 @@ class SDEConfig:
             n_noise_channels=crn.n_reactions,
             n_hidden_layers=n_hidden_layers,
             clip_state=clip_state,
+            d_protocol=d_protocol,
         )
 
     def __repr__(self) -> str:

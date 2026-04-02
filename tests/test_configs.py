@@ -83,3 +83,15 @@ def test_sde_config_from_crn_forwards_other_kwargs():
     assert config.d_hidden == 64
     assert config.n_hidden_layers == 3
     assert config.clip_state is False
+
+
+def test_sde_config_from_crn_d_protocol_default_is_zero():
+    """from_crn without d_protocol argument gives d_protocol=0."""
+    config = SDEConfig.from_crn(birth_death())
+    assert config.d_protocol == 0
+
+
+def test_sde_config_from_crn_d_protocol_forwarded():
+    """from_crn with d_protocol=64 gives config.d_protocol == 64."""
+    config = SDEConfig.from_crn(birth_death(), d_protocol=64)
+    assert config.d_protocol == 64
