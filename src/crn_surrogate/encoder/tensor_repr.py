@@ -68,15 +68,28 @@ class CRNTensorRepr:
             which species influence each reaction's propensity.
         propensity_type_ids: (n_reactions,) integer type IDs (see PropensityType).
         propensity_params: (n_reactions, max_params) kinetic parameters.
+        is_external: (n_species,) boolean tensor; True for externally controlled
+            species. External species receive no reaction-to-species messages
+            in the bipartite graph (nothing flows back into them).
     """
 
     stoichiometry: torch.Tensor
     dependency_matrix: torch.Tensor
     propensity_type_ids: torch.Tensor
     propensity_params: torch.Tensor
+    is_external: torch.Tensor = None  # type: ignore[assignment]
     species_names: tuple[str, ...] = ()
     reaction_names: tuple[str, ...] = ()
     name: str = ""
+
+    def __post_init__(self) -> None:
+        # Default is_external to all-False if not provided
+        if self.is_external is None:
+            object.__setattr__(
+                self,
+                "is_external",
+                torch.zeros(self.stoichiometry.shape[1], dtype=torch.bool),
+            )
 
     @property
     def n_species(self) -> int:
@@ -92,7 +105,9 @@ class CRNTensorRepr:
     def bipartite_edges(self) -> BipartiteEdges:
         """Lazily computed and cached bipartite edges for this CRN's graph structure."""
         if not hasattr(self, "_cached_edges"):
-            edges = build_bipartite_edges(self.stoichiometry, self.dependency_matrix)
+            edges = build_bipartite_edges(
+                self.stoichiometry, self.dependency_matrix, self.is_external
+            )
             object.__setattr__(self, "_cached_edges", edges)
         return self._cached_edges  # type: ignore[attr-defined]
 
@@ -155,11 +170,13 @@ def crn_to_tensor_repr(crn: "CRN", max_params: int = 8) -> CRNTensorRepr:
             dep_row = torch.ones(crn.n_species)
         dep_rows.append(dep_row)
 
+    is_external = torch.tensor(crn.is_external, dtype=torch.bool)
     return CRNTensorRepr(
         stoichiometry=crn.stoichiometry_matrix,
         dependency_matrix=torch.stack(dep_rows, dim=0),
         propensity_type_ids=torch.tensor(type_id_rows, dtype=torch.long),
         propensity_params=torch.stack(param_rows, dim=0),
+        is_external=is_external,
         species_names=crn.species_names,
         reaction_names=tuple(rxn.name for rxn in crn.reactions),
         name=crn.name if hasattr(crn, "name") else "",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from typing import Sequence
 
+import numpy as np
 import torch
 
 from crn_surrogate.crn.reaction import Reaction
@@ -21,16 +22,23 @@ class CRN:
             vectors must have the same length (n_species).
         species_names: Optional names for each species. If omitted, defaults
             to "S0", "S1", etc.
+        external_species: Set of species indices that are externally controlled
+            (pseudo-species driven by an InputProtocol rather than CRN kinetics).
+            External species must have zero net stoichiometric change in all
+            reactions; they can only appear as propensity dependencies.
 
     Raises:
-        ValueError: If reactions is empty, stoichiometry lengths mismatch, or
-            species_names length does not match n_species.
+        ValueError: If reactions is empty, stoichiometry lengths mismatch,
+            species_names length does not match n_species, external_species
+            indices are out of range, or any external species has nonzero net
+            stoichiometric change in any reaction.
     """
 
     def __init__(
         self,
         reactions: Sequence[Reaction],
         species_names: Sequence[str] | None = None,
+        external_species: frozenset[int] = frozenset(),
     ) -> None:
         if not reactions:
             raise ValueError("CRN must have at least one reaction")
@@ -56,6 +64,27 @@ class CRN:
         else:
             self._species_names = tuple(f"S{i}" for i in range(n_species))
 
+        # Validate external_species indices
+        invalid = frozenset(idx for idx in external_species if idx not in range(n_species))
+        if invalid:
+            raise ValueError(
+                f"external_species indices {sorted(invalid)} are out of range "
+                f"for a CRN with {n_species} species (valid range: 0..{n_species - 1})"
+            )
+
+        # Validate that external species have zero net stoichiometric change
+        for idx in external_species:
+            for r, rxn in enumerate(reactions):
+                net_change = rxn.stoichiometry[idx].item()
+                if net_change != 0:
+                    raise ValueError(
+                        f"External species {idx} ('{self._species_names[idx]}') has "
+                        f"nonzero net stoichiometric change ({net_change:+g}) in "
+                        f"reaction {r} ('{rxn.name}'). External species must not be "
+                        f"products or reactants — only propensity dependencies."
+                    )
+
+        self._external_species = external_species
         self._stoichiometry_matrix: torch.Tensor | None = None
 
     @property
@@ -139,6 +168,29 @@ class CRN:
             The Reaction at the given index.
         """
         return self._reactions[index]
+
+    @property
+    def external_species(self) -> frozenset[int]:
+        """Set of species indices that are externally controlled."""
+        return self._external_species
+
+    @property
+    def n_external_species(self) -> int:
+        """Number of externally controlled species."""
+        return len(self._external_species)
+
+    @property
+    def is_external(self) -> np.ndarray:
+        """Boolean array of shape (n_species,): True for externally controlled species."""
+        mask = np.zeros(self._n_species, dtype=bool)
+        for idx in self._external_species:
+            mask[idx] = True
+        return mask
+
+    @property
+    def internal_species_mask(self) -> np.ndarray:
+        """Boolean array of shape (n_species,): True for non-external (kinetic) species."""
+        return ~self.is_external
 
     def __repr__(self) -> str:
         return (
