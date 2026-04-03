@@ -52,12 +52,14 @@ class DatasetConfig:
 class MassAction3sConfig(BaseExperimentConfig):
     """Full experiment configuration for the mass-action <=3 species experiment."""
 
-    experiment_name: str = "mass_action_3s_v1"
+    experiment_name: str = "mass_action_3s_v2"
     wandb_group: str = "mass-action-3s"
     max_n_species: int = 3
     max_n_reactions: int = 6
     dataset: DatasetConfig = field(default_factory=DatasetConfig)
 
+    d_model: int = 128
+    d_hidden: int = 256
+    n_sde_hidden_layers: int = 3
 
-# Backward-compatible alias
-ExperimentConfig = MassAction3sConfig
+    batch_size: int = 64
