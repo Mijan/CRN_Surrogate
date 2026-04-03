@@ -53,10 +53,19 @@ def _make_checkpoint_fn(
     def _checkpoint(items: list[TrajectoryItem], label: str) -> None:
         path = output_dir / f"{experiment_name}_{split_name}_{label}.pt"
         torch.save(CRNTrajectoryDataset(items), path)
-        print(f"  Checkpoint: {len(items)} items → {path.name}")
+        print(f"  Checkpoint: {len(items)} items -> {path.name}")
+
         if use_wandb:
             import wandb
-            wandb.log({f"data/{split_name}_checkpoint": len(items)})
+            # Log as a versioned artifact so it survives Colab disconnects
+            artifact = wandb.Artifact(
+                name=f"{experiment_name}_{split_name}_checkpoint",
+                type="dataset-checkpoint",
+                metadata={"n_items": len(items), "label": label},
+            )
+            artifact.add_file(str(path))
+            wandb.log_artifact(artifact)
+            wandb.log({f"data/{split_name}_items": len(items)})
 
     return _checkpoint
 
