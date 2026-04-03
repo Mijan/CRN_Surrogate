@@ -71,6 +71,34 @@ def _make_checkpoint_fn(
     return _checkpoint
 
 
+def _simulate_with_timeout(
+    ssa: GillespieSSA,
+    timeout: int,
+    **kwargs,
+) -> list | None:
+    """Run SSA ensemble with a wall-clock timeout. Returns None on timeout.
+
+    Args:
+        ssa: Configured Gillespie SSA simulator.
+        timeout: Wall-clock timeout in seconds. 0 disables the timeout.
+        **kwargs: Forwarded to ssa.simulate_batch.
+
+    Returns:
+        List of trajectories, or None if the timeout was exceeded.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FuturesTimeout
+
+    if timeout <= 0:
+        return ssa.simulate_batch(**kwargs)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(ssa.simulate_batch, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeout:
+            return None
+
+
 def _generate_split(
     gen: MassActionCRNGenerator,
     ssa: GillespieSSA,
@@ -82,6 +110,8 @@ def _generate_split(
     initial_state_mean: float,
     initial_state_spread: float,
     t_max: float,
+    sim_timeout: int = 30,
+    n_init_conditions: int = 1,
     use_wandb: bool = False,
     checkpoint_fn: Callable[[list[TrajectoryItem], str], None] | None = None,
     checkpoint_every: int = 50,
@@ -94,11 +124,13 @@ def _generate_split(
         ssa: Gillespie SSA simulator.
         time_grid: (T,) shared time grid for all trajectories.
         n_items: Target number of items to generate.
-        n_ssa_trajectories: SSA trajectories per CRN.
-        n_workers: Parallel workers for SSA simulation.
+        n_ssa_trajectories: SSA trajectories per CRN (split across init conditions).
+        n_workers: Parallel workers for SSA simulation (unused inside timeout wrapper).
         initial_state_mean: Geometric mean of initial molecule counts.
         initial_state_spread: Geometric standard deviation for initial states.
         t_max: Simulation end time.
+        sim_timeout: Per-CRN wall-clock timeout in seconds (0 to disable).
+        n_init_conditions: Number of distinct initial conditions per CRN topology.
         use_wandb: Whether to log progress metrics to W&B.
         checkpoint_fn: Optional callback called every checkpoint_every items.
         checkpoint_every: Checkpoint interval in number of accepted items.
@@ -114,87 +146,102 @@ def _generate_split(
     stats: dict = {
         "n_attempted": 0,
         "n_curated_pass": 0,
+        "n_timeout": 0,
         "n_species_dist": {},
         "n_reactions_dist": {},
     }
     filter_ = ViabilityFilter(CurationConfig())
+    normalizer = TrajectoryNormalizer()
+    n_trajs_per_init = max(1, n_ssa_trajectories // n_init_conditions)
     max_attempts = n_items * 5
 
     pbar = tqdm(total=n_items, initial=len(items), desc="generating", unit="item")
 
     while len(items) < n_items and stats["n_attempted"] < max_attempts:
         crn = gen.sample()
-        init_state = gen.sample_initial_state(
-            crn,
-            mean_molecules=initial_state_mean,
-            spread=initial_state_spread,
-        )
         crn_repr = crn_to_tensor_repr(crn)
-
-        trajectories_list = ssa.simulate_batch(
-            stoichiometry=crn.stoichiometry_matrix,
-            propensity_fn=crn.evaluate_propensities,
-            initial_state=init_state,
-            t_max=t_max,
-            n_trajectories=n_ssa_trajectories,
-            n_workers=min(n_workers, n_ssa_trajectories),
-        )
-        traj_tensor = Trajectory.stack_on_grid(trajectories_list, time_grid)
-
         stats["n_attempted"] += 1
-        result = filter_.check(traj_tensor)
 
-        if not result.viable:
-            pbar.set_postfix(
-                attempts=stats["n_attempted"],
-                rate=f"{stats['n_curated_pass']}/{stats['n_attempted']}",
+        for _ in range(n_init_conditions):
+            if len(items) >= n_items:
+                break
+
+            init_state = gen.sample_initial_state(
+                crn,
+                mean_molecules=initial_state_mean,
+                spread=initial_state_spread,
             )
-            continue
 
-        stats["n_curated_pass"] += 1
-        items.append(
-            TrajectoryItem(
-                crn_repr=crn_repr,
+            trajectories_list = _simulate_with_timeout(
+                ssa,
+                sim_timeout,
+                stoichiometry=crn.stoichiometry_matrix,
+                propensity_fn=crn.evaluate_propensities,
                 initial_state=init_state,
-                trajectories=traj_tensor,
-                times=time_grid,
-                scale=TrajectoryNormalizer().compute_scale(traj_tensor),
-                motif_label="mass_action",
+                t_max=t_max,
+                n_trajectories=n_trajs_per_init,
+                n_workers=1,
             )
-        )
+            if trajectories_list is None:
+                stats["n_timeout"] += 1
+                pbar.set_postfix(timeouts=stats["n_timeout"])
+                continue
 
-        ns = str(crn.n_species)
-        nr = str(crn.n_reactions)
-        stats["n_species_dist"][ns] = stats["n_species_dist"].get(ns, 0) + 1
-        stats["n_reactions_dist"][nr] = stats["n_reactions_dist"].get(nr, 0) + 1
+            traj_tensor = Trajectory.stack_on_grid(trajectories_list, time_grid)
+            result = filter_.check(traj_tensor)
 
-        pbar.update(1)
-        pbar.set_postfix(
-            pass_rate=f"{stats['n_curated_pass']/stats['n_attempted']:.0%}",
-            species=ns,
-        )
+            if not result.viable:
+                pbar.set_postfix(
+                    attempts=stats["n_attempted"],
+                    rate=f"{stats['n_curated_pass']}/{stats['n_attempted']}",
+                )
+                continue
 
-        if use_wandb and len(items) % 10 == 0:
-            import wandb
-            wandb.log({
-                "data/items_generated": len(items),
-                "data/attempts": stats["n_attempted"],
-                "data/pass_rate": stats["n_curated_pass"] / stats["n_attempted"],
-            })
+            stats["n_curated_pass"] += 1
+            items.append(
+                TrajectoryItem(
+                    crn_repr=crn_repr,
+                    initial_state=init_state,
+                    trajectories=traj_tensor,
+                    times=time_grid,
+                    scale=normalizer.compute_scale(traj_tensor),
+                    motif_label="mass_action",
+                )
+            )
 
-        if (
-            checkpoint_fn is not None
-            and checkpoint_every > 0
-            and len(items) % checkpoint_every == 0
-        ):
-            checkpoint_fn(items, f"checkpoint_{len(items)}")
+            ns = str(crn.n_species)
+            nr = str(crn.n_reactions)
+            stats["n_species_dist"][ns] = stats["n_species_dist"].get(ns, 0) + 1
+            stats["n_reactions_dist"][nr] = stats["n_reactions_dist"].get(nr, 0) + 1
+
+            pbar.update(1)
+            pbar.set_postfix(
+                pass_rate=f"{stats['n_curated_pass']/stats['n_attempted']:.0%}",
+                species=ns,
+            )
+
+            if use_wandb and len(items) % 10 == 0:
+                import wandb
+                wandb.log({
+                    "data/items_generated": len(items),
+                    "data/attempts": stats["n_attempted"],
+                    "data/pass_rate": stats["n_curated_pass"] / stats["n_attempted"],
+                })
+
+            if (
+                checkpoint_fn is not None
+                and checkpoint_every > 0
+                and len(items) % checkpoint_every == 0
+            ):
+                checkpoint_fn(items, f"checkpoint_{len(items)}")
 
     pbar.close()
 
     stats["pass_rate"] = stats["n_curated_pass"] / max(stats["n_attempted"], 1)
     print(
         f"  Generated {len(items)}/{n_items} items "
-        f"({stats['n_attempted']} attempted, {stats['pass_rate']:.0%} pass rate)"
+        f"({stats['n_attempted']} attempted, {stats['pass_rate']:.0%} pass rate, "
+        f"{stats['n_timeout']} timeouts)"
     )
     print(f"  Species distribution:   {stats['n_species_dist']}")
     print(f"  Reactions distribution: {stats['n_reactions_dist']}")
@@ -216,6 +263,8 @@ def generate(
     use_wandb: bool,
     seed: int,
     checkpoint_every: int,
+    sim_timeout: int = 30,
+    n_init_conditions: int = 1,
     resume_train: Path | None = None,
     resume_val: Path | None = None,
 ) -> None:
@@ -227,6 +276,8 @@ def generate(
         use_wandb: Whether to log an artifact to W&B.
         seed: Random seed for reproducibility.
         checkpoint_every: Save intermediate dataset every N accepted items.
+        sim_timeout: Per-CRN wall-clock timeout in seconds (0 to disable).
+        n_init_conditions: Number of distinct initial conditions per CRN topology.
         resume_train: Optional checkpoint path to resume training split from.
         resume_val: Optional checkpoint path to resume validation split from.
     """
@@ -268,6 +319,8 @@ def generate(
         initial_state_mean=cfg.dataset.initial_state_mean,
         initial_state_spread=cfg.dataset.initial_state_spread,
         t_max=cfg.dataset.t_max,
+        sim_timeout=sim_timeout,
+        n_init_conditions=n_init_conditions,
         use_wandb=use_wandb,
         checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "train", use_wandb),
         checkpoint_every=checkpoint_every,
@@ -283,6 +336,8 @@ def generate(
         initial_state_mean=cfg.dataset.initial_state_mean,
         initial_state_spread=cfg.dataset.initial_state_spread,
         t_max=cfg.dataset.t_max,
+        sim_timeout=sim_timeout,
+        n_init_conditions=n_init_conditions,
         use_wandb=use_wandb,
         checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "val", use_wandb),
         checkpoint_every=checkpoint_every,
@@ -350,6 +405,18 @@ def main() -> None:
         default=None,
         help="Path to a validation split checkpoint .pt file to resume from",
     )
+    parser.add_argument(
+        "--sim-timeout",
+        type=int,
+        default=30,
+        help="Per-CRN SSA simulation timeout in seconds (0 to disable)",
+    )
+    parser.add_argument(
+        "--n-init-conditions",
+        type=int,
+        default=1,
+        help="Number of distinct initial conditions per CRN (trajectories split across them)",
+    )
     args = parser.parse_args()
 
     cfg = get_config(args.config)
@@ -359,6 +426,8 @@ def main() -> None:
         use_wandb=not args.no_wandb,
         seed=args.seed,
         checkpoint_every=args.checkpoint_every,
+        sim_timeout=args.sim_timeout,
+        n_init_conditions=args.n_init_conditions,
         resume_train=Path(args.resume_train) if args.resume_train else None,
         resume_val=Path(args.resume_val) if args.resume_val else None,
     )

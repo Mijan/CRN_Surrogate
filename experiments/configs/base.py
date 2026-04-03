@@ -60,6 +60,8 @@ class BaseExperimentConfig:
     d_hidden: int = 128
     n_sde_hidden_layers: int = 2
     d_protocol: int = 0
+    context_dropout: float = 0.0
+    mlp_dropout: float = 0.0
 
     # ── Training ─────────────────────────────────────────────────────────
     n_ssa_samples: int = 32
@@ -79,6 +81,7 @@ class BaseExperimentConfig:
             d_model=self.d_model,
             n_layers=self.n_encoder_layers,
             use_attention=True,
+            context_dropout=self.context_dropout,
         )
 
     def build_sde_config(self) -> SDEConfig:
@@ -90,6 +93,7 @@ class BaseExperimentConfig:
             n_hidden_layers=self.n_sde_hidden_layers,
             clip_state=True,
             d_protocol=self.d_protocol,
+            mlp_dropout=self.mlp_dropout,
         )
 
     def build_model_config(self) -> ModelConfig:

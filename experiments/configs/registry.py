@@ -50,6 +50,10 @@ def available_configs() -> list[str]:
 
 
 # ── Register all experiments ──────────────────────────────────────────────────
-from experiments.configs.mass_action_3s import MassAction3sConfig  # noqa: E402
+from experiments.configs.mass_action_3s import (  # noqa: E402
+    MassAction3sConfig,
+    MassAction3sV3Config,
+)
 
 register("mass_action_3s", MassAction3sConfig)
+register("mass_action_3s_v3", MassAction3sV3Config)

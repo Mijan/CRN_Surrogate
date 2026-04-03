@@ -20,7 +20,9 @@ class EncoderConfig:
         type_embed_dim: Dimension allocated to the propensity type embedding in
             ReactionEmbedding. Defaults to d_model // 4; the remainder
             (d_model - type_embed_dim) goes to the parameter projection.
-        dropout: Dropout probability (0.0 = disabled).
+        dropout: Dropout probability applied inside message-passing layers (0.0 = disabled).
+        context_dropout: Dropout applied to the pooled context vector before it is
+            passed to the SDE. Regularises the bottleneck that carries CRN identity.
         use_attention: If True, use AttentiveMessagePassingLayer instead of
             SumMessagePassingLayer. Disabled by default for initial experiments.
     """
@@ -32,6 +34,7 @@ class EncoderConfig:
     max_species: int = 32
     type_embed_dim: int = 0  # 0 = auto: set to d_model // 4 in __post_init__
     dropout: float = 0.0
+    context_dropout: float = 0.0
     use_attention: bool = False
 
     def __post_init__(self) -> None:
@@ -64,6 +67,8 @@ class SDEConfig:
         n_noise_channels: Number of independent noise channels (Wiener processes).
         n_hidden_layers: Number of FiLM-conditioned hidden layers in each network.
         clip_state: Whether to clamp state to [0, ∞) after each Euler-Maruyama step.
+        mlp_dropout: Dropout applied after each hidden-layer activation in the
+            drift and diffusion ConditionedMLPs (0.0 = disabled).
     """
 
     d_model: int = 64
@@ -72,6 +77,7 @@ class SDEConfig:
     n_hidden_layers: int = 2
     clip_state: bool = True  # clamp X >= 0 after each Euler-Maruyama step
     d_protocol: int = 0  # protocol encoder output dim; 0 means no protocol conditioning
+    mlp_dropout: float = 0.0
 
     def __post_init__(self) -> None:
         if self.n_hidden_layers < 1:

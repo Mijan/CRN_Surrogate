@@ -59,6 +59,7 @@ class BipartiteGNNEncoder(nn.Module):
         self._layers = nn.ModuleList(
             [layer_cls(config.d_model) for _ in range(config.n_layers)]
         )
+        self._context_dropout = nn.Dropout(config.context_dropout)
 
     def forward(
         self,
@@ -85,7 +86,7 @@ class BipartiteGNNEncoder(nn.Module):
         for layer in self._layers:
             h_species, h_reactions = layer(h_species, h_reactions, edges)
 
-        context = self._pool_context(h_species, h_reactions)
+        context = self._context_dropout(self._pool_context(h_species, h_reactions))
         return CRNContext(
             species_embeddings=h_species,
             reaction_embeddings=h_reactions,

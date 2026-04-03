@@ -36,6 +36,7 @@ class ConditionedMLP(nn.Module):
         d_out: int,
         d_context: int,
         n_hidden_layers: int = 2,
+        dropout: float = 0.0,
     ) -> None:
         """Args:
             d_in: Input dimension.
@@ -43,6 +44,7 @@ class ConditionedMLP(nn.Module):
             d_out: Output dimension.
             d_context: Dimension of the conditioning context vector.
             n_hidden_layers: Number of FiLM-conditioned hidden layers. Must be >= 1.
+            dropout: Dropout probability applied after each hidden-layer activation.
 
         Raises:
             ValueError: If n_hidden_layers < 1.
@@ -64,6 +66,7 @@ class ConditionedMLP(nn.Module):
             [FiLMLayer(d_context, d_hidden) for _ in range(n_hidden_layers)]
         )
         self._output_proj = nn.Linear(d_hidden, d_out)
+        self._dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
         """Forward pass with per-layer FiLM conditioning.
@@ -78,7 +81,7 @@ class ConditionedMLP(nn.Module):
         """
         h = F.silu(self._input_proj(x))
         for linear, film in zip(self._hidden_layers, self._film_layers):
-            h = F.silu(film(linear(h), context))
+            h = self._dropout(F.silu(film(linear(h), context)))
         return self._output_proj(h)
 
     def __repr__(self) -> str:

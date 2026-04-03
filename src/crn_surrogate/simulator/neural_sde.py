@@ -37,6 +37,7 @@ class CRNNeuralSDE(nn.Module):
             d_out=n_species,
             d_context=d_context,
             n_hidden_layers=config.n_hidden_layers,
+            dropout=config.mlp_dropout,
         )
         self._diff_net = ConditionedMLP(
             d_in=n_species,
@@ -44,6 +45,7 @@ class CRNNeuralSDE(nn.Module):
             d_out=n_species * config.n_noise_channels,
             d_context=d_context,
             n_hidden_layers=config.n_hidden_layers,
+            dropout=config.mlp_dropout,
         )
 
     @property

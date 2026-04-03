@@ -63,3 +63,40 @@ class MassAction3sConfig(BaseExperimentConfig):
     n_sde_hidden_layers: int = 3
 
     batch_size: int = 64
+
+
+@dataclass(frozen=True)
+class MassAction3sV3Config(BaseExperimentConfig):
+    """Mass-action 3s v3: larger dataset, dropout, multiple initial conditions."""
+
+    experiment_name: str = "mass_action_3s_v3"
+    wandb_group: str = "mass-action-3s"
+
+    # Architecture (same as v2)
+    max_n_species: int = 3
+    max_n_reactions: int = 6
+    d_model: int = 128
+    n_encoder_layers: int = 3
+    d_hidden: int = 256
+    n_sde_hidden_layers: int = 3
+
+    # Dropout
+    context_dropout: float = 0.1
+    mlp_dropout: float = 0.1
+
+    # Training
+    max_epochs: int = 200
+    batch_size: int = 64
+    lr: float = 1e-3
+    dt: float = 0.1
+    val_every: int = 5
+    n_ssa_samples: int = 32
+
+    # Dataset (larger)
+    dataset: DatasetConfig = field(
+        default_factory=lambda: DatasetConfig(
+            n_train=5000,
+            n_val=500,
+            n_ssa_trajectories=32,
+        )
+    )

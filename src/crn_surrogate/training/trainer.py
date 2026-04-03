@@ -150,7 +150,7 @@ class Trainer:
                 result.val_losses.append(val_loss)
                 result.val_nll_losses.append(val_nll)
                 result.val_epochs.append(epoch)
-                self._maybe_checkpoint(val_loss, epoch)
+                self._maybe_checkpoint(val_nll, epoch)
                 print(
                     f"Epoch {epoch:4d} | train={train_loss:.4f} | "
                     f"val={val_loss:.4f} | val_nll={val_nll:.4f} | "
