@@ -21,7 +21,7 @@ from crn_surrogate.data.dataset import CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer
-from experiments.configs.mass_action_3s import ExperimentConfig
+from experiments.configs.mass_action_3s import MassAction3sConfig
 
 
 def _select_device(device_arg: str) -> torch.device:
@@ -59,7 +59,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    cfg = ExperimentConfig()
+    cfg = MassAction3sConfig()
     torch.manual_seed(args.seed)
 
     device = _select_device(args.device)

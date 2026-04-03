@@ -23,14 +23,14 @@ from crn_surrogate.data.generation.mass_action_generator import MassActionCRNGen
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from experiments.configs.mass_action_3s import ExperimentConfig
+from experiments.configs.mass_action_3s import MassAction3sConfig
 
 
 def _generate_split(
     gen: MassActionCRNGenerator,
     ssa: GillespieSSA,
     time_grid: torch.Tensor,
-    cfg: ExperimentConfig,
+    cfg: MassAction3sConfig,
     n_items: int,
 ) -> tuple[list[TrajectoryItem], dict]:
     """Generate one dataset split, returning (items, metadata_dict).
@@ -115,7 +115,7 @@ def _generate_split(
 
 
 def generate(
-    cfg: ExperimentConfig,
+    cfg: MassAction3sConfig,
     output_dir: Path,
     *,
     use_wandb: bool,
@@ -194,7 +194,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    cfg = ExperimentConfig()
+    cfg = MassAction3sConfig()
     generate(
         cfg,
         output_dir=Path(args.output_dir),
