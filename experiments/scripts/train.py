@@ -17,7 +17,6 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from crn_surrogate.data.dataset import CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer

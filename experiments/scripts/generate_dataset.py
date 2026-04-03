@@ -147,7 +147,9 @@ def generate(
     time_grid = torch.linspace(0.0, cfg.dataset.t_max, cfg.dataset.n_time_points)
 
     print(f"Generating {cfg.dataset.n_train} training items...")
-    train_items, train_meta = _generate_split(gen, ssa, time_grid, cfg, cfg.dataset.n_train)
+    train_items, train_meta = _generate_split(
+        gen, ssa, time_grid, cfg, cfg.dataset.n_train
+    )
 
     print(f"Generating {cfg.dataset.n_val} validation items...")
     val_items, val_meta = _generate_split(gen, ssa, time_grid, cfg, cfg.dataset.n_val)
