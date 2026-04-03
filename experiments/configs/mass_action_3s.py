@@ -85,7 +85,7 @@ class MassAction3sV3Config(BaseExperimentConfig):
     mlp_dropout: float = 0.1
 
     # Training
-    max_epochs: int = 200
+    max_epochs: int = 1000
     batch_size: int = 64
     lr: float = 1e-3
     dt: float = 0.1
