@@ -178,8 +178,9 @@ class Trainer:
 
             self._step_scheduler(val_loss)
 
-        if self._wandb is not None:
-            self._wandb.finish()
+        # wandb.finish() is intentionally NOT called here.
+        # The caller is responsible for closing the run after any post-training
+        # logging (e.g. saving model artifacts) is complete.
 
         return result
 
