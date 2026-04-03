@@ -197,10 +197,10 @@ def test_reaction_orders_birth_death():
 
 
 def test_reaction_orders_lotka_volterra():
-    """prey_birth: order 0, predation: order 2, predator_death: order 1."""
+    """prey_birth: order 1, predation: order 2, predator_death: order 1."""
     t = lotka_volterra_topology()
     orders = t.reaction_orders()
-    assert orders[0].item() == 0.0
+    assert orders[0].item() == 1.0
     assert orders[1].item() == 2.0
     assert orders[2].item() == 1.0
 

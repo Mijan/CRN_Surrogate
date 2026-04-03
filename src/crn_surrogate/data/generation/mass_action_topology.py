@@ -250,12 +250,12 @@ def lotka_volterra_topology() -> MassActionTopology:
     """Return the Lotka-Volterra topology: prey birth, predation, predator death."""
     return MassActionTopology(
         reactant_matrix=torch.tensor([
-            [0.0, 0.0],  # 0 -> prey
+            [1.0, 0.0],  # prey -> 2 prey (first-order birth)
             [1.0, 1.0],  # prey + predator -> 2 predator
             [0.0, 1.0],  # predator -> 0
         ]),
         product_matrix=torch.tensor([
-            [1.0, 0.0],
+            [2.0, 0.0],
             [0.0, 2.0],
             [0.0, 0.0],
         ]),

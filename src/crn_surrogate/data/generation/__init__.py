@@ -1,8 +1,8 @@
 """Data generation sub-package for CRN surrogate training data.
 
 Provides factories for all supported CRN motif types, parameter sampling,
-trajectory curation, and an end-to-end pipeline that writes dataset.pt and
-metadata.json to disk.
+trajectory curation, an end-to-end pipeline that writes dataset.pt and
+metadata.json to disk, and named reference CRNs for testing and notebooks.
 """
 
 from crn_surrogate.data.generation.composer import (
@@ -21,6 +21,13 @@ from crn_surrogate.data.generation.motif_type import MotifType
 from crn_surrogate.data.generation.pipeline import (
     DataGenerationPipeline,
     DatasetSummary,
+)
+from crn_surrogate.data.generation.reference_crns import (
+    birth_death,
+    lotka_volterra,
+    schlogl,
+    simple_mapk_cascade,
+    toggle_switch,
 )
 from crn_surrogate.data.generation.task import (
     GenerationTask,
@@ -44,4 +51,9 @@ __all__ = [
     "all_elementary_tasks",
     "default_tasks",
     "get_factory",
+    "birth_death",
+    "lotka_volterra",
+    "schlogl",
+    "simple_mapk_cascade",
+    "toggle_switch",
 ]

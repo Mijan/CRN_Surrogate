@@ -11,7 +11,11 @@ Covers:
 import pytest
 
 from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
-from crn_surrogate.crn.examples import birth_death, lotka_volterra, simple_mapk_cascade
+from crn_surrogate.data.generation.reference_crns import (
+    birth_death,
+    lotka_volterra,
+    simple_mapk_cascade,
+)
 
 # ── EncoderConfig ─────────────────────────────────────────────────────────────
 

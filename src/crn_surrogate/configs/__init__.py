@@ -1,6 +1,11 @@
 """Configuration dataclasses and enums for model and training hyperparameters."""
 
-from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
+from crn_surrogate.configs.model_config import (
+    EncoderConfig,
+    ModelConfig,
+    ProtocolEncoderConfig,
+    SDEConfig,
+)
 from crn_surrogate.configs.training_config import (
     SchedulerType,
     TrainingConfig,
@@ -10,6 +15,7 @@ from crn_surrogate.configs.training_config import (
 __all__ = [
     "EncoderConfig",
     "ModelConfig",
+    "ProtocolEncoderConfig",
     "SDEConfig",
     "SchedulerType",
     "TrainingConfig",

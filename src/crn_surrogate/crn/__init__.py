@@ -2,7 +2,7 @@
 
 Public API: CRN, Reaction, PropensityFn.
 Propensity factories: see crn_surrogate.crn.propensities.
-Example CRNs: see crn_surrogate.crn.examples.
+Reference CRNs: see crn_surrogate.data.generation.reference_crns.
 Input protocols: see crn_surrogate.crn.inputs.
 """
 

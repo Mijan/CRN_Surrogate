@@ -468,7 +468,7 @@ def _make_birth_death_with_inducer() -> tuple:
 
 def test_gillespie_with_empty_protocol_behaves_identically() -> None:
     """GillespieSSA with EMPTY_PROTOCOL produces a valid trajectory."""
-    from crn_surrogate.crn.examples import birth_death
+    from crn_surrogate.data.generation.reference_crns import birth_death
     from crn_surrogate.simulation.gillespie import GillespieSSA
 
     crn = birth_death(k_birth=2.0, k_death=0.5)
@@ -587,7 +587,7 @@ def test_crn_tensor_repr_is_external_tensor_populated() -> None:
 
 def test_crn_tensor_repr_is_external_all_false_for_standard_crn() -> None:
     """Standard CRN (no external species) has all-False is_external tensor."""
-    from crn_surrogate.crn.examples import birth_death
+    from crn_surrogate.data.generation.reference_crns import birth_death
     from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 
     crn = birth_death()

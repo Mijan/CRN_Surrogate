@@ -2,7 +2,7 @@
 
 import torch
 
-from crn_surrogate.crn.examples import birth_death
+from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 
 

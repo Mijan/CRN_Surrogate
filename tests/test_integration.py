@@ -10,7 +10,7 @@ import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
-from crn_surrogate.crn.examples import birth_death, lotka_volterra
+from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
