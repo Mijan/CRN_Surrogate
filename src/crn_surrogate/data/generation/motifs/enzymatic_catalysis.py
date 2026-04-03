@@ -101,9 +101,9 @@ class EnzymaticCatalysisFactory(MotifFactory[EnzymaticCatalysisParams]):
         """
         self.validate_params(params)
         # Rate order matches topology reaction order: [binding, unbinding, catalysis, substrate_input, product_degradation]
-        crn = self.TOPOLOGY.to_crn([
-            params.k_on, params.k_off, params.k_cat, params.k_prod, params.k_deg_P
-        ])
+        crn = self.TOPOLOGY.to_crn(
+            [params.k_on, params.k_off, params.k_cat, params.k_prod, params.k_deg_P]
+        )
         if self._species_names != self.TOPOLOGY.species_names:
             return CRN(reactions=crn.reactions, species_names=list(self._species_names))
         return crn

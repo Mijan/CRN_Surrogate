@@ -15,7 +15,6 @@ from crn_surrogate.data.generation.mass_action_topology import (
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 
-
 # ── Construction validation ───────────────────────────────────────────────────
 
 

@@ -281,7 +281,9 @@ class Trainer:
             for _ in range(k)
         ]
         pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species_sde)
-        return self._rollout_loss.compute(pred_states, true_trajs_padded, mask=species_mask)
+        return self._rollout_loss.compute(
+            pred_states, true_trajs_padded, mask=species_mask
+        )
 
     def _effective_mode(self, epoch: int) -> TrainingMode:
         """Determine effective training mode for this epoch."""
@@ -361,7 +363,9 @@ class Trainer:
             species_mask[:n_species_actual] = True
             true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
             M, T, _ = true_trajs.shape
-            true_trajs_padded = torch.zeros(M, T, n_species_sde, device=true_trajs.device)
+            true_trajs_padded = torch.zeros(
+                M, T, n_species_sde, device=true_trajs.device
+            )
             true_trajs_padded[:, :, :n_species_actual] = true_trajs
             times = batch["times"][idx]
             padded_init = torch.zeros(n_species_sde, device=init_state.device)
@@ -395,7 +399,9 @@ class Trainer:
             species_mask[:n_species_actual] = True
             true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
             M, T, _ = true_trajs.shape
-            true_trajs_padded = torch.zeros(M, T, n_species_sde, device=true_trajs.device)
+            true_trajs_padded = torch.zeros(
+                M, T, n_species_sde, device=true_trajs.device
+            )
             true_trajs_padded[:, :, :n_species_actual] = true_trajs
             times = batch["times"][idx]
             total = total + self._nll_loss.compute(

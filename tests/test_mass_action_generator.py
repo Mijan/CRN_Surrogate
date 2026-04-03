@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import torch
-import pytest
 
 from crn_surrogate.data.generation.mass_action_generator import (
     MassActionCRNGenerator,
@@ -14,7 +13,6 @@ from crn_surrogate.data.generation.mass_action_generator import (
 from crn_surrogate.data.generation.mass_action_topology import birth_death_topology
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
-
 
 # ── RandomTopologySampler ─────────────────────────────────────────────────────
 
@@ -34,7 +32,9 @@ def test_sampler_production_when_required():
     sampler = RandomTopologySampler(RandomTopologyConfig(require_production=True))
     for _ in range(10):
         t = sampler.sample()
-        assert t.has_production(), "Topology missing production despite require_production=True"
+        assert t.has_production(), (
+            "Topology missing production despite require_production=True"
+        )
 
 
 def test_sampler_degradation_when_required():
@@ -66,7 +66,10 @@ def test_sampler_topology_passes_validation():
     for _ in range(20):
         t = sampler.sample()
         # Reconstruction from matrices should succeed (no validation error)
-        from crn_surrogate.data.generation.mass_action_topology import MassActionTopology
+        from crn_surrogate.data.generation.mass_action_topology import (
+            MassActionTopology,
+        )
+
         MassActionTopology(
             reactant_matrix=t.reactant_matrix,
             product_matrix=t.product_matrix,

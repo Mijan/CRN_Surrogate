@@ -99,7 +99,9 @@ class RandomTopologySampler:
         cfg = self._config
         for _ in range(cfg.max_attempts):
             n_species = int(
-                torch.randint(cfg.n_species_range[0], cfg.n_species_range[1] + 1, (1,)).item()
+                torch.randint(
+                    cfg.n_species_range[0], cfg.n_species_range[1] + 1, (1,)
+                ).item()
             )
             n_reactions = int(
                 torch.randint(
@@ -151,7 +153,9 @@ class RandomTopologySampler:
             )
         if failures > 0:
             warnings.warn(
-                f"Sampler failed on {failures}/{n} attempts.", RuntimeWarning, stacklevel=2
+                f"Sampler failed on {failures}/{n} attempts.",
+                RuntimeWarning,
+                stacklevel=2,
             )
         return results
 
@@ -258,8 +262,8 @@ class RandomTopologySampler:
                     break
             else:
                 # Accept last sampled even if duplicate; repair/dedup will clean it up
-                reactant_rows.append(rv)  # type: ignore[possibly-undefined]
-                product_rows.append(pv)  # type: ignore[possibly-undefined]
+                reactant_rows.append(rv)
+                product_rows.append(pv)
 
         return reactant_rows, product_rows
 
@@ -287,7 +291,7 @@ class RandomTopologySampler:
         net = product_mat - reactant_mat
 
         for s in range(n_species):
-            if (net[:, s].abs().sum() == 0):
+            if net[:, s].abs().sum() == 0:
                 violations.append(("non_participating", s))
 
         if cfg.require_production:
@@ -376,7 +380,9 @@ class RandomTopologySampler:
             violations = self._find_violations(reactant_rows, product_rows, n_species)
             if not violations:
                 break
-            self._fix_one_violation(violations[0], reactant_rows, product_rows, n_species)
+            self._fix_one_violation(
+                violations[0], reactant_rows, product_rows, n_species
+            )
         else:
             violations = self._find_violations(reactant_rows, product_rows, n_species)
             if violations:
@@ -495,8 +501,8 @@ class MassActionCRNGenerator:
         Returns:
             (n_species,) tensor of non-negative rounded molecule counts.
         """
-        log_counts = (
-            torch.randn(crn.n_species) * math.log(spread) + math.log(mean_molecules)
+        log_counts = torch.randn(crn.n_species) * math.log(spread) + math.log(
+            mean_molecules
         )
         return log_counts.exp().round().clamp(min=0.0)
 

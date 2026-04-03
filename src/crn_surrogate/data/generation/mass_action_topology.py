@@ -72,7 +72,9 @@ class MassActionTopology:
         noop_mask = net.abs().sum(dim=1) == 0
         if noop_mask.any():
             noop_indices = noop_mask.nonzero(as_tuple=True)[0].tolist()
-            raise ValueError(f"Reactions {noop_indices} have zero net stoichiometry (no-ops)")
+            raise ValueError(
+                f"Reactions {noop_indices} have zero net stoichiometry (no-ops)"
+            )
 
         # Every species participates in at least one reaction
         inactive = net.abs().sum(dim=0) == 0
@@ -203,12 +205,20 @@ class MassActionTopology:
             for s in range(self.n_species):
                 count = int(self.reactant_matrix[r, s].item())
                 if count > 0:
-                    label = f"{count}{self.species_names[s]}" if count > 1 else self.species_names[s]
+                    label = (
+                        f"{count}{self.species_names[s]}"
+                        if count > 1
+                        else self.species_names[s]
+                    )
                     reactants.append(label)
             for s in range(self.n_species):
                 count = int(self.product_matrix[r, s].item())
                 if count > 0:
-                    label = f"{count}{self.species_names[s]}" if count > 1 else self.species_names[s]
+                    label = (
+                        f"{count}{self.species_names[s]}"
+                        if count > 1
+                        else self.species_names[s]
+                    )
                     products.append(label)
             lhs = " + ".join(reactants) if reactants else "0"
             rhs = " + ".join(products) if products else "0"
@@ -249,16 +259,20 @@ def auto_catalysis_topology() -> MassActionTopology:
 def lotka_volterra_topology() -> MassActionTopology:
     """Return the Lotka-Volterra topology: prey birth, predation, predator death."""
     return MassActionTopology(
-        reactant_matrix=torch.tensor([
-            [1.0, 0.0],  # prey -> 2 prey (first-order birth)
-            [1.0, 1.0],  # prey + predator -> 2 predator
-            [0.0, 1.0],  # predator -> 0
-        ]),
-        product_matrix=torch.tensor([
-            [2.0, 0.0],
-            [0.0, 2.0],
-            [0.0, 0.0],
-        ]),
+        reactant_matrix=torch.tensor(
+            [
+                [1.0, 0.0],  # prey -> 2 prey (first-order birth)
+                [1.0, 1.0],  # prey + predator -> 2 predator
+                [0.0, 1.0],  # predator -> 0
+            ]
+        ),
+        product_matrix=torch.tensor(
+            [
+                [2.0, 0.0],
+                [0.0, 2.0],
+                [0.0, 0.0],
+            ]
+        ),
         species_names=("prey", "predator"),
         reaction_names=("prey_birth", "predation", "predator_death"),
     )
@@ -267,20 +281,24 @@ def lotka_volterra_topology() -> MassActionTopology:
 def enzymatic_catalysis_topology() -> MassActionTopology:
     """Return the enzymatic Michaelis-Menten topology (S, E, C, P)."""
     return MassActionTopology(
-        reactant_matrix=torch.tensor([
-            [1.0, 1.0, 0.0, 0.0],  # S + E -> C
-            [0.0, 0.0, 1.0, 0.0],  # C -> S + E
-            [0.0, 0.0, 1.0, 0.0],  # C -> E + P
-            [0.0, 0.0, 0.0, 0.0],  # 0 -> S
-            [0.0, 0.0, 0.0, 1.0],  # P -> 0
-        ]),
-        product_matrix=torch.tensor([
-            [0.0, 0.0, 1.0, 0.0],
-            [1.0, 1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 1.0],
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0],
-        ]),
+        reactant_matrix=torch.tensor(
+            [
+                [1.0, 1.0, 0.0, 0.0],  # S + E -> C
+                [0.0, 0.0, 1.0, 0.0],  # C -> S + E
+                [0.0, 0.0, 1.0, 0.0],  # C -> E + P
+                [0.0, 0.0, 0.0, 0.0],  # 0 -> S
+                [0.0, 0.0, 0.0, 1.0],  # P -> 0
+            ]
+        ),
+        product_matrix=torch.tensor(
+            [
+                [0.0, 0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 1.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 0.0],
+            ]
+        ),
         species_names=("S", "E", "C", "P"),
         reaction_names=(
             "binding",

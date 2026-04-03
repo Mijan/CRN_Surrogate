@@ -16,8 +16,8 @@ import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
-from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
+from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
@@ -292,7 +292,9 @@ def test_trainer_variable_topology(tmp_path):
 
     # 2-species CRN: S0 produced, S0 degrades, S0->S1, S1 degrades
     rxns_2s = [
-        Reaction(stoichiometry=torch.tensor([1.0, 0.0]), propensity=constant_rate(k=1.0)),
+        Reaction(
+            stoichiometry=torch.tensor([1.0, 0.0]), propensity=constant_rate(k=1.0)
+        ),
         Reaction(
             stoichiometry=torch.tensor([-1.0, 0.0]),
             propensity=mass_action(0.5, torch.tensor([1.0, 0.0])),
@@ -323,7 +325,9 @@ def test_trainer_variable_topology(tmp_path):
             ),
             time_grid,
         )
-        return TrajectoryItem(crn_repr=crn_repr, initial_state=init, trajectories=trajs, times=time_grid)
+        return TrajectoryItem(
+            crn_repr=crn_repr, initial_state=init, trajectories=trajs, times=time_grid
+        )
 
     items = [_make_item(crn_1s, torch.tensor([5.0])) for _ in range(2)]
     items += [_make_item(crn_2s, torch.tensor([5.0, 3.0])) for _ in range(2)]
