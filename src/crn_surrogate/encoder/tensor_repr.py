@@ -89,7 +89,11 @@ class CRNTensorRepr:
             object.__setattr__(
                 self,
                 "is_external",
-                torch.zeros(self.stoichiometry.shape[1], dtype=torch.bool),
+                torch.zeros(
+                    self.stoichiometry.shape[1],
+                    dtype=torch.bool,
+                    device=self.stoichiometry.device,
+                ),
             )
 
     @property
