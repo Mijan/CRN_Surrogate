@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-import torch
-
 from crn_surrogate.crn.crn import CRN
-from crn_surrogate.crn.propensities import constant_rate, mass_action
-from crn_surrogate.crn.reaction import Reaction
+from crn_surrogate.data.generation.mass_action_topology import (
+    MassActionTopology,
+    birth_death_topology,
+)
 from crn_surrogate.data.generation.motif_type import MotifType
 from crn_surrogate.data.generation.motifs.base import (
     InitialStateRange,
@@ -43,6 +43,7 @@ class BirthDeathFactory(MotifFactory[BirthDeathParams]):
     _DEFAULT_SPECIES: ClassVar[tuple[str, ...]] = ("A",)
     _N_SPECIES: ClassVar[int] = 1
     _N_REACTIONS: ClassVar[int] = 2
+    TOPOLOGY: ClassVar[MassActionTopology] = birth_death_topology()
 
     def _default_species_names(self) -> tuple[str, ...]:
         return self._DEFAULT_SPECIES
@@ -83,17 +84,8 @@ class BirthDeathFactory(MotifFactory[BirthDeathParams]):
             CRN with constitutive production and first-order degradation.
         """
         self.validate_params(params)
-        a_name = self._species_names[0]
-        reactions = [
-            Reaction(
-                stoichiometry=torch.tensor([1.0]),
-                propensity=constant_rate(params.k_prod),
-                name=f"{a_name}_birth",
-            ),
-            Reaction(
-                stoichiometry=torch.tensor([-1.0]),
-                propensity=mass_action(params.k_deg, torch.tensor([1.0])),
-                name=f"{a_name}_death",
-            ),
-        ]
-        return CRN(reactions=reactions, species_names=list(self._species_names))
+        # Rate order matches topology reaction order: [birth (k_prod), death (k_deg)]
+        crn = self.TOPOLOGY.to_crn([params.k_prod, params.k_deg])
+        if self._species_names != self.TOPOLOGY.species_names:
+            return CRN(reactions=crn.reactions, species_names=list(self._species_names))
+        return crn

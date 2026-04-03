@@ -2,7 +2,7 @@
 
 import torch
 
-from crn_surrogate.crn.examples import birth_death
+from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
 

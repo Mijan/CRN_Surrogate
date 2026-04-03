@@ -18,3 +18,7 @@ venv/
 
 # OS
 .DS_Store
+
+# Experiment artifacts
+experiments/datasets/
+experiments/checkpoints/

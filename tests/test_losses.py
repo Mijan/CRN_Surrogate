@@ -344,7 +344,7 @@ def test_gaussian_nll_batched_is_faster(sde_and_ctx):
 
 def _make_nll_sde_and_ctx(n_species: int = 2, d_protocol: int = 0):
     from crn_surrogate.configs.model_config import EncoderConfig
-    from crn_surrogate.crn.examples import lotka_volterra
+    from crn_surrogate.data.generation.reference_crns import lotka_volterra
     from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
     from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 

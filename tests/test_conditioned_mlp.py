@@ -18,7 +18,7 @@ import pytest
 import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
-from crn_surrogate.crn.examples import birth_death
+from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulator.conditioned_mlp import ConditionedMLP

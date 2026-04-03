@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-import torch
-
 from crn_surrogate.crn.crn import CRN
-from crn_surrogate.crn.propensities import constant_rate, mass_action
-from crn_surrogate.crn.reaction import Reaction
+from crn_surrogate.data.generation.mass_action_topology import (
+    MassActionTopology,
+    enzymatic_catalysis_topology,
+)
 from crn_surrogate.data.generation.motif_type import MotifType
 from crn_surrogate.data.generation.motifs.base import (
     InitialStateRange,
@@ -56,6 +56,7 @@ class EnzymaticCatalysisFactory(MotifFactory[EnzymaticCatalysisParams]):
     _IDX_E: ClassVar[int] = 1
     _IDX_C: ClassVar[int] = 2
     _IDX_P: ClassVar[int] = 3
+    TOPOLOGY: ClassVar[MassActionTopology] = enzymatic_catalysis_topology()
 
     def _default_species_names(self) -> tuple[str, ...]:
         return self._DEFAULT_SPECIES
@@ -99,43 +100,10 @@ class EnzymaticCatalysisFactory(MotifFactory[EnzymaticCatalysisParams]):
             CRN with explicit enzyme-substrate complex formation and catalysis.
         """
         self.validate_params(params)
-        reactions = [
-            Reaction(
-                stoichiometry=torch.tensor([-1.0, -1.0, 1.0, 0.0]),
-                propensity=mass_action(
-                    params.k_on,
-                    torch.tensor([1.0, 1.0, 0.0, 0.0]),
-                ),
-                name="binding",
-            ),
-            Reaction(
-                stoichiometry=torch.tensor([1.0, 1.0, -1.0, 0.0]),
-                propensity=mass_action(
-                    params.k_off,
-                    torch.tensor([0.0, 0.0, 1.0, 0.0]),
-                ),
-                name="unbinding",
-            ),
-            Reaction(
-                stoichiometry=torch.tensor([0.0, 1.0, -1.0, 1.0]),
-                propensity=mass_action(
-                    params.k_cat,
-                    torch.tensor([0.0, 0.0, 1.0, 0.0]),
-                ),
-                name="catalysis",
-            ),
-            Reaction(
-                stoichiometry=torch.tensor([1.0, 0.0, 0.0, 0.0]),
-                propensity=constant_rate(params.k_prod),
-                name="substrate_input",
-            ),
-            Reaction(
-                stoichiometry=torch.tensor([0.0, 0.0, 0.0, -1.0]),
-                propensity=mass_action(
-                    params.k_deg_P,
-                    torch.tensor([0.0, 0.0, 0.0, 1.0]),
-                ),
-                name="product_degradation",
-            ),
-        ]
-        return CRN(reactions=reactions, species_names=list(self._species_names))
+        # Rate order matches topology reaction order: [binding, unbinding, catalysis, substrate_input, product_degradation]
+        crn = self.TOPOLOGY.to_crn(
+            [params.k_on, params.k_off, params.k_cat, params.k_prod, params.k_deg_P]
+        )
+        if self._species_names != self.TOPOLOGY.species_names:
+            return CRN(reactions=crn.reactions, species_names=list(self._species_names))
+        return crn

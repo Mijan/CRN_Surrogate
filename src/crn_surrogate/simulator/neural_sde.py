@@ -46,6 +46,11 @@ class CRNNeuralSDE(nn.Module):
             n_hidden_layers=config.n_hidden_layers,
         )
 
+    @property
+    def n_species(self) -> int:
+        """State dimension the SDE was constructed for."""
+        return self._n_species
+
     def drift(
         self,
         t: torch.Tensor,

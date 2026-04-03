@@ -13,7 +13,7 @@ import pytest
 import torch
 
 from crn_surrogate.crn import CRN, Reaction
-from crn_surrogate.crn.examples import (
+from crn_surrogate.data.generation.reference_crns import (
     birth_death,
     lotka_volterra,
     schlogl,

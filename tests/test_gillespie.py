@@ -13,7 +13,7 @@ Covers:
 import pytest
 import torch
 
-from crn_surrogate.crn.examples import birth_death, lotka_volterra
+from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.interpolation import TimegridUtils
 

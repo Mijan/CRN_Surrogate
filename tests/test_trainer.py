@@ -16,8 +16,8 @@ import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
-from crn_surrogate.crn.examples import birth_death
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
+from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
@@ -269,3 +269,91 @@ def test_trainer_profiler_batch_csv_contains_forward_and_backward_columns(tmp_pa
         header = next(csv_module.reader(f))
     assert "forward" in header
     assert "backward" in header
+
+
+# ── Variable-topology ─────────────────────────────────────────────────────────
+
+
+def test_trainer_variable_topology(tmp_path):
+    """Trainer handles a dataset with CRNs of different n_species without error."""
+    from crn_surrogate.crn.crn import CRN
+    from crn_surrogate.crn.propensities import constant_rate, mass_action
+    from crn_surrogate.crn.reaction import Reaction
+
+    # 1-species CRN: birth + death
+    rxns_1s = [
+        Reaction(stoichiometry=torch.tensor([1.0]), propensity=constant_rate(k=1.0)),
+        Reaction(
+            stoichiometry=torch.tensor([-1.0]),
+            propensity=mass_action(0.5, torch.tensor([1.0])),
+        ),
+    ]
+    crn_1s = CRN(rxns_1s)
+
+    # 2-species CRN: S0 produced, S0 degrades, S0->S1, S1 degrades
+    rxns_2s = [
+        Reaction(
+            stoichiometry=torch.tensor([1.0, 0.0]), propensity=constant_rate(k=1.0)
+        ),
+        Reaction(
+            stoichiometry=torch.tensor([-1.0, 0.0]),
+            propensity=mass_action(0.5, torch.tensor([1.0, 0.0])),
+        ),
+        Reaction(
+            stoichiometry=torch.tensor([-1.0, 1.0]),
+            propensity=mass_action(0.3, torch.tensor([1.0, 0.0])),
+        ),
+        Reaction(
+            stoichiometry=torch.tensor([0.0, -1.0]),
+            propensity=mass_action(0.4, torch.tensor([0.0, 1.0])),
+        ),
+    ]
+    crn_2s = CRN(rxns_2s)
+
+    ssa = GillespieSSA()
+    time_grid = torch.linspace(0.0, 5.0, 8)
+
+    def _make_item(crn, init):
+        crn_repr = crn_to_tensor_repr(crn)
+        trajs = Trajectory.stack_on_grid(
+            ssa.simulate_batch(
+                stoichiometry=crn.stoichiometry_matrix,
+                propensity_fn=crn.evaluate_propensities,
+                initial_state=init.clone(),
+                t_max=5.0,
+                n_trajectories=4,
+            ),
+            time_grid,
+        )
+        return TrajectoryItem(
+            crn_repr=crn_repr, initial_state=init, trajectories=trajs, times=time_grid
+        )
+
+    items = [_make_item(crn_1s, torch.tensor([5.0])) for _ in range(2)]
+    items += [_make_item(crn_2s, torch.tensor([5.0, 3.0])) for _ in range(2)]
+
+    train_dataset = CRNTrajectoryDataset(items)
+
+    # SDE configured for max 2 species
+    max_n_species = 2
+    model_config = ModelConfig(
+        encoder=EncoderConfig(d_model=8, n_layers=1),
+        sde=SDEConfig(d_model=8, d_hidden=16, n_noise_channels=4),
+    )
+    encoder = BipartiteGNNEncoder(model_config.encoder)
+    sde = CRNNeuralSDE(model_config.sde, n_species=max_n_species)
+
+    config = TrainingConfig(
+        max_epochs=1,
+        batch_size=4,
+        n_sde_samples=2,
+        log_dir=str(tmp_path / "logs"),
+        checkpoint_dir=str(tmp_path / "ckpt"),
+        scheduler_type=SchedulerType.COSINE,
+    )
+    trainer = Trainer(encoder, sde, model_config, config)
+    result = trainer.train(train_dataset)
+
+    assert len(result.train_losses) == 1
+    assert result.train_losses[0] == result.train_losses[0]  # not NaN
+    assert result.train_losses[0] < float("inf")

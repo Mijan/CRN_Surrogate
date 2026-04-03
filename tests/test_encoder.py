@@ -17,7 +17,7 @@ import pytest
 import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig
-from crn_surrogate.crn.examples import birth_death, lotka_volterra
+from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.embeddings import ReactionEmbedding, SpeciesEmbedding
 from crn_surrogate.encoder.graph_utils import (

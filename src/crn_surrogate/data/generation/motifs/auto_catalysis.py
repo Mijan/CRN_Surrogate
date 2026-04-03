@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-import torch
-
 from crn_surrogate.crn.crn import CRN
-from crn_surrogate.crn.propensities import constant_rate, mass_action
-from crn_surrogate.crn.reaction import Reaction
+from crn_surrogate.data.generation.mass_action_topology import (
+    MassActionTopology,
+    auto_catalysis_topology,
+)
 from crn_surrogate.data.generation.motif_type import MotifType
 from crn_surrogate.data.generation.motifs.base import (
     InitialStateRange,
@@ -48,6 +48,7 @@ class AutoCatalysisFactory(MotifFactory[AutoCatalysisParams]):
     _DEFAULT_SPECIES: ClassVar[tuple[str, ...]] = ("A",)
     _N_SPECIES: ClassVar[int] = 1
     _N_REACTIONS: ClassVar[int] = 3
+    TOPOLOGY: ClassVar[MassActionTopology] = auto_catalysis_topology()
 
     def _default_species_names(self) -> tuple[str, ...]:
         return self._DEFAULT_SPECIES
@@ -105,22 +106,8 @@ class AutoCatalysisFactory(MotifFactory[AutoCatalysisParams]):
             CRN with basal production, autocatalytic amplification, and degradation.
         """
         self.validate_params(params)
-        a_name = self._species_names[0]
-        reactions = [
-            Reaction(
-                stoichiometry=torch.tensor([1.0]),
-                propensity=constant_rate(params.k_basal),
-                name=f"{a_name}_basal_production",
-            ),
-            Reaction(
-                stoichiometry=torch.tensor([1.0]),
-                propensity=mass_action(params.k_cat, torch.tensor([1.0])),
-                name=f"{a_name}_autocatalysis",
-            ),
-            Reaction(
-                stoichiometry=torch.tensor([-1.0]),
-                propensity=mass_action(params.k_deg, torch.tensor([1.0])),
-                name=f"{a_name}_degradation",
-            ),
-        ]
-        return CRN(reactions=reactions, species_names=list(self._species_names))
+        # Rate order matches topology reaction order: [basal_production, autocatalysis, degradation]
+        crn = self.TOPOLOGY.to_crn([params.k_basal, params.k_cat, params.k_deg])
+        if self._species_names != self.TOPOLOGY.species_names:
+            return CRN(reactions=crn.reactions, species_names=list(self._species_names))
+        return crn

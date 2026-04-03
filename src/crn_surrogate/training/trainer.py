@@ -231,36 +231,59 @@ class Trainer:
         return total / B
 
     def _compute_item_loss(self, batch: dict, idx: int, epoch: int = 1) -> torch.Tensor:
-        """Compute loss for a single item in the batch, dispatching on training mode."""
-        crn_repr = self._reconstruct_tensor_repr(batch, idx)
-        n_species = crn_repr.n_species
-        init_state = batch["initial_states"][idx, :n_species]
-        true_trajs = batch["trajectories"][idx, :, :, :n_species]  # (M, T, n_species)
-        times = batch["times"][idx]
-        species_mask = batch["species_mask"][idx, :n_species]
+        """Compute loss for a single item in the batch, dispatching on training mode.
 
+        States are padded to the SDE's configured n_species so that a single model
+        handles CRNs with varying numbers of species. When n_species_actual ==
+        n_species_sde the padding is a no-op and behaviour is identical to before.
+        """
+        crn_repr = self._reconstruct_tensor_repr(batch, idx)
+        n_species_actual = crn_repr.n_species
+        n_species_sde = self._sde.n_species
+
+        # Encoder operates on the actual-sized CRN (GNN handles variable topology)
+        init_state = batch["initial_states"][idx, :n_species_actual]
         ctx = self._encoder(crn_repr, init_state)
+
+        # Species mask for the SDE's full dimensionality
+        species_mask = torch.zeros(
+            n_species_sde, dtype=torch.bool, device=init_state.device
+        )
+        species_mask[:n_species_actual] = True
+
+        # Pad trajectories to SDE dimensionality
+        true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
+        M, T, _ = true_trajs.shape
+        true_trajs_padded = torch.zeros(M, T, n_species_sde, device=true_trajs.device)
+        true_trajs_padded[:, :, :n_species_actual] = true_trajs
+
+        times = batch["times"][idx]
         mode = self._effective_mode(epoch)
 
         if mode == TrainingMode.TEACHER_FORCING:
             return self._nll_loss.compute(
                 sde=self._sde,
                 crn_context=ctx,
-                true_trajectory=true_trajs,
+                true_trajectory=true_trajs_padded,
                 times=times,
                 dt=self._train_config.dt,
                 mask=species_mask,
             )
 
+        # Rollout: pad initial state for the solver
+        padded_init = torch.zeros(n_species_sde, device=init_state.device)
+        padded_init[:n_species_actual] = init_state
         k = self._train_config.n_sde_samples
         pred_samples = [
             self._solver.solve(
-                self._sde, init_state, ctx, times, self._train_config.dt
+                self._sde, padded_init, ctx, times, self._train_config.dt
             ).states
             for _ in range(k)
         ]
-        pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species)
-        return self._rollout_loss.compute(pred_states, true_trajs, mask=species_mask)
+        pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species_sde)
+        return self._rollout_loss.compute(
+            pred_states, true_trajs_padded, mask=species_mask
+        )
 
     def _effective_mode(self, epoch: int) -> TrainingMode:
         """Determine effective training mode for this epoch."""
@@ -327,44 +350,64 @@ class Trainer:
     def _compute_batch_rollout_loss(self, batch: dict) -> torch.Tensor:
         """Compute mean rollout loss over all items in the batch (always full rollout)."""
         B = batch["stoichiometry"].shape[0]
+        n_species_sde = self._sde.n_species
         total = torch.zeros(1, device=batch["stoichiometry"].device)
         for idx in range(B):
             crn_repr = self._reconstruct_tensor_repr(batch, idx)
-            n_species = crn_repr.n_species
-            init_state = batch["initial_states"][idx, :n_species]
-            true_trajs = batch["trajectories"][idx, :, :, :n_species]
-            times = batch["times"][idx]
-            species_mask = batch["species_mask"][idx, :n_species]
+            n_species_actual = crn_repr.n_species
+            init_state = batch["initial_states"][idx, :n_species_actual]
             ctx = self._encoder(crn_repr, init_state)
+            species_mask = torch.zeros(
+                n_species_sde, dtype=torch.bool, device=init_state.device
+            )
+            species_mask[:n_species_actual] = True
+            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
+            M, T, _ = true_trajs.shape
+            true_trajs_padded = torch.zeros(
+                M, T, n_species_sde, device=true_trajs.device
+            )
+            true_trajs_padded[:, :, :n_species_actual] = true_trajs
+            times = batch["times"][idx]
+            padded_init = torch.zeros(n_species_sde, device=init_state.device)
+            padded_init[:n_species_actual] = init_state
             k = self._train_config.n_sde_samples
             pred_samples = [
                 self._solver.solve(
-                    self._sde, init_state, ctx, times, self._train_config.dt
+                    self._sde, padded_init, ctx, times, self._train_config.dt
                 ).states
                 for _ in range(k)
             ]
             pred_states = torch.stack(pred_samples, dim=0)
             total = total + self._rollout_loss.compute(
-                pred_states, true_trajs, mask=species_mask
+                pred_states, true_trajs_padded, mask=species_mask
             )
         return total / B
 
     def _compute_batch_nll(self, batch: dict) -> torch.Tensor:
         """Compute mean NLL loss over all items in the batch (teacher forcing)."""
         B = batch["stoichiometry"].shape[0]
+        n_species_sde = self._sde.n_species
         total = torch.zeros(1, device=batch["stoichiometry"].device)
         for idx in range(B):
             crn_repr = self._reconstruct_tensor_repr(batch, idx)
-            n_species = crn_repr.n_species
-            init_state = batch["initial_states"][idx, :n_species]
-            true_trajs = batch["trajectories"][idx, :, :, :n_species]
-            times = batch["times"][idx]
-            species_mask = batch["species_mask"][idx, :n_species]
+            n_species_actual = crn_repr.n_species
+            init_state = batch["initial_states"][idx, :n_species_actual]
             ctx = self._encoder(crn_repr, init_state)
+            species_mask = torch.zeros(
+                n_species_sde, dtype=torch.bool, device=init_state.device
+            )
+            species_mask[:n_species_actual] = True
+            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
+            M, T, _ = true_trajs.shape
+            true_trajs_padded = torch.zeros(
+                M, T, n_species_sde, device=true_trajs.device
+            )
+            true_trajs_padded[:, :, :n_species_actual] = true_trajs
+            times = batch["times"][idx]
             total = total + self._nll_loss.compute(
                 sde=self._sde,
                 crn_context=ctx,
-                true_trajectory=true_trajs,
+                true_trajectory=true_trajs_padded,
                 times=times,
                 dt=self._train_config.dt,
                 mask=species_mask,
