@@ -89,22 +89,27 @@ def main() -> None:
         )
         artifact = run.use_artifact(args.wandb_artifact)
         artifact_dir = artifact.download()
-        train_dataset = torch.load(
-            Path(artifact_dir) / f"{cfg.experiment_name}_train.pt",
-            weights_only=False,
-        )
-        val_dataset = torch.load(
-            Path(artifact_dir) / f"{cfg.experiment_name}_val.pt",
-            weights_only=False,
-        )
+        artifact_path = Path(artifact_dir)
+        train_files = sorted(artifact_path.glob("*_train.pt"))
+        val_files = sorted(artifact_path.glob("*_val.pt"))
+        if not train_files or not val_files:
+            raise FileNotFoundError(
+                f"Expected *_train.pt and *_val.pt in {artifact_path}, "
+                f"found: {list(artifact_path.iterdir())}"
+            )
+        train_dataset = torch.load(train_files[0], weights_only=False)
+        val_dataset = torch.load(val_files[0], weights_only=False)
     else:
         dataset_dir = Path(args.dataset_dir)
-        train_dataset = torch.load(
-            dataset_dir / f"{cfg.experiment_name}_train.pt", weights_only=False
-        )
-        val_dataset = torch.load(
-            dataset_dir / f"{cfg.experiment_name}_val.pt", weights_only=False
-        )
+        train_files = sorted(dataset_dir.glob("*_train.pt"))
+        val_files = sorted(dataset_dir.glob("*_val.pt"))
+        if not train_files or not val_files:
+            raise FileNotFoundError(
+                f"Expected *_train.pt and *_val.pt in {dataset_dir}, "
+                f"found: {list(dataset_dir.iterdir())}"
+            )
+        train_dataset = torch.load(train_files[0], weights_only=False)
+        val_dataset = torch.load(val_files[0], weights_only=False)
         if use_wandb:
             import wandb
 
