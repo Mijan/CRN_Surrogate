@@ -90,13 +90,13 @@ class MassAction3sV3Config(BaseExperimentConfig):
     lr: float = 1e-3
     dt: float = 0.1
     val_every: int = 5
-    n_ssa_samples: int = 32
+    n_ssa_samples: int = 62
 
     # Dataset (larger)
     dataset: DatasetConfig = field(
         default_factory=lambda: DatasetConfig(
-            n_train=5000,
-            n_val=500,
-            n_ssa_trajectories=32,
+            n_train=50000,
+            n_val=5000,
+            n_ssa_trajectories=64,
         )
     )
