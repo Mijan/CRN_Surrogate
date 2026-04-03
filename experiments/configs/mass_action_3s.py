@@ -90,7 +90,7 @@ class MassAction3sV3Config(BaseExperimentConfig):
     lr: float = 1e-3
     dt: float = 0.1
     val_every: int = 5
-    n_ssa_samples: int = 62
+    n_ssa_samples: int = 64
 
     # Dataset (larger)
     dataset: DatasetConfig = field(
