@@ -260,7 +260,7 @@ pip install wandb && wandb login
 ## Quick start
 
 ```python
-from crn_surrogate.crn.examples import birth_death
+from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig, ModelConfig
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
@@ -288,10 +288,20 @@ traj = solver.solve(sde, x0, ctx, t_span, dt=0.05)
 
 See `notebooks/` for worked examples:
 
-- `notebooks/03a_encoder_comparison.ipynb` — sum vs. attentive message passing
-- `notebooks/03b_loss_comparison.ipynb` — `GaussianTransitionNLL` vs. `CombinedTrajectoryLoss`
-- `notebooks/05_external_inputs.ipynb` — pulse schedule visualization, Gillespie with external inputs
-- `notebooks/06_neural_sde_with_inputs.ipynb` — encoder invariance, protocol encoding, full forward pass
+- `notebooks/foundations/01_crn_and_simulation.ipynb` — CRN construction, Gillespie SSA walkthrough
+- `notebooks/foundations/02_motif_library.ipynb` — motif factories and parameter sampling
+- `notebooks/foundations/03_external_inputs.ipynb` — PulseSchedule visualization, Gillespie with external inputs
+- `notebooks/foundations/04_data_pipeline.ipynb` — full motif-based pipeline demo
+- `notebooks/model/01_encoder.ipynb` — bipartite GNN encoder
+- `notebooks/model/02_neural_sde.ipynb` — neural SDE and Euler-Maruyama solver
+- `notebooks/model/03_losses.ipynb` — `GaussianTransitionNLL` vs. `CombinedTrajectoryLoss`
+- `notebooks/experiments/01_encoder_comparison.ipynb` — sum vs. attentive message passing
+- `notebooks/experiments/02_loss_comparison.ipynb` — loss comparison study
+- `notebooks/experiments/03_encoder_generalization.ipynb` — encoder generalization across CRN families
+
+See `experiments/analysis/` for experiment-specific notebooks:
+
+- `experiments/analysis/CRN_Surrogate_MassAction3s.ipynb` — mass-action random generation + training run
 
 ## CRN definitions
 
@@ -307,9 +317,29 @@ Supported propensity types (all serializable to/from flat tensors):
 | `SubstrateInhibitionParams` | `substrate_inhibition(v_max, k_m, k_i, species_index)` | `a = V·Xₛ / (Kₘ + Xₛ + Xₛ²/Kᵢ)` |
 | `EnzymeMichaelisMentenParams` | `enzyme_michaelis_menten(k_cat, k_m, enzyme_idx, substrate_idx)` | `a = k_cat·E·S / (Kₘ + S)` |
 
-Built-in example CRNs: `birth_death`, `lotka_volterra`, `schlogl`, `toggle_switch`, `simple_mapk_cascade`.
+Named reference CRNs are in `crn_surrogate.data.generation.reference_crns`:
 
-Analytical reference functions for validation are available for `birth_death` and `lotka_volterra` via `birth_death_analytical(k_birth, k_death)` and `lotka_volterra_analytical(...)`, which return drift/diffusion callables and stationary moments.
+```python
+from crn_surrogate.data.generation.reference_crns import (
+    birth_death, lotka_volterra, schlogl, toggle_switch, simple_mapk_cascade,
+)
+```
+
+| Function | Species | Reactions | Description |
+|----------|---------|-----------|-------------|
+| `birth_death(k_birth, k_death)` | 1 | 2 | Constitutive production + first-order degradation |
+| `lotka_volterra(k_prey_birth, k_predation, k_predator_death)` | 2 | 3 | Predator-prey oscillator |
+| `toggle_switch(alpha1, alpha2, beta, hill_n)` | 2 | 4 | Gardner toggle switch (mutual Hill repression) |
+| `schlogl(k1, k2, k3, k4)` | 1 | 4 | Bistable autocatalytic network |
+| `simple_mapk_cascade(...)` | 7 | 6 | Three-tier MAPK cascade with enzymatic kinetics |
+
+Analytical Chemical Langevin Equation (CLE) reference functions for `birth_death` and `lotka_volterra` are in `crn_surrogate.evaluation.analytical`:
+
+```python
+from crn_surrogate.evaluation.analytical import birth_death_analytical, lotka_volterra_analytical
+
+drift_fn, diffusion_fn, stationary_mean, stationary_var = birth_death_analytical(k_birth=1.0, k_death=0.1)
+```
 
 Custom propensities must be implemented as callable classes with `.params` (returning a registered `Params` dataclass) and `.species_dependencies` (returning `frozenset[int]`). Raw lambdas are not serializable.
 
@@ -327,7 +357,7 @@ Eight elementary motifs are supported, each with a typed `Params` dataclass and 
 | `AUTO_CATALYSIS` | `AutoCatalysisFactory` | 1 | 3 | Autocatalytic + degradation |
 | `NEGATIVE_AUTOREGULATION` | `NegativeAutoregulationFactory` | 2 | 4 | Hill repression self-regulation |
 | `TOGGLE_SWITCH` | `ToggleSwitchFactory` | 2 | 4 | Mutual Hill repression |
-| `ENZYMATIC_CATALYSIS` | `EnzymaticCatalysisFactory` | 3 | 4 | Michaelis-Menten |
+| `ENZYMATIC_CATALYSIS` | `EnzymaticCatalysisFactory` | 4 | 5 | Michaelis-Menten (S+E→C→E+P + substrate input/product degradation) |
 | `INCOHERENT_FEEDFORWARD` | `IncoherentFeedforwardFactory` | 3 | 5 | Hill activation + repression |
 | `REPRESSILATOR` | `RepressilatorFactory` | 3 | 6 | Cyclic Hill repression |
 | `SUBSTRATE_INHIBITION` | `SubstrateInhibitionMotifFactory` | 2 | 4 | Substrate inhibition kinetics |
@@ -428,6 +458,62 @@ from torch.utils.data import DataLoader
 dataset = CRNTrajectoryDataset.from_file("data_cache/dataset/dataset.pt")
 loader = DataLoader(dataset, batch_size=16, collate_fn=CRNCollator())
 ```
+
+## Random mass-action CRN generation
+
+The `MassActionCRNGenerator` generates random CRNs with mass-action kinetics by sampling from a space of topologies defined by `RandomTopologyConfig`. This is the data source used for the `mass_action_3s` experiment.
+
+### Topology and kinetics
+
+`MassActionTopology` is the canonical representation of a mass-action CRN's structure, separating topology (stoichiometry) from kinetics (rate constants):
+
+```python
+from crn_surrogate.data.generation.mass_action_topology import (
+    MassActionTopology, birth_death_topology, lotka_volterra_topology,
+)
+
+# Named topologies (used by motif factories)
+topo = birth_death_topology()  # reactant/product matrices, propensity order per reaction
+crn  = topo.to_crn([1.0, 0.1])  # pass rate constants → CRN instance
+
+# Random topology
+from crn_surrogate.data.generation.random_topology_sampler import (
+    RandomTopologySampler, RandomTopologyConfig,
+)
+config = RandomTopologyConfig(
+    n_species_range=(1, 3),
+    n_reactions_range=(2, 6),
+    max_reactant_order=2,
+    max_product_count=2,
+)
+sampler = RandomTopologySampler(config)
+topo = sampler.sample()
+```
+
+### Generator
+
+`MassActionCRNGenerator` wraps the sampler with rate-constant sampling and initial-state sampling:
+
+```python
+from crn_surrogate.data.generation.mass_action_generator import (
+    MassActionCRNGenerator, MassActionGeneratorConfig,
+)
+
+gen_config = MassActionGeneratorConfig(
+    topology=RandomTopologyConfig(n_species_range=(1, 3), n_reactions_range=(2, 6)),
+    rate_constant_range=(0.01, 10.0),
+)
+gen = MassActionCRNGenerator(gen_config)
+
+crn = gen.sample()
+x0  = gen.sample_initial_state(crn, mean_molecules=10.0, spread=3.0)
+```
+
+Rate constants are drawn log-uniformly from `rate_constant_range`. Initial states are drawn from a log-normal distribution parameterized by geometric mean and spread (σ in log space).
+
+### Curation
+
+Generated CRNs are filtered with the same `ViabilityFilter` used in the motif-based pipeline (NaN/Inf, blowup, stuck-at-zero, low activity, low CV, unbounded final state).
 
 ## Training
 
@@ -593,6 +679,148 @@ ax = analyzer.plot_histogram(report)   # histogram + N(0,1) overlay
 ax = analyzer.plot_qq(report)          # QQ plot (Blom quantile formula)
 ```
 
+## Experiments
+
+The `experiments/` directory contains end-to-end experiment pipelines: dataset generation, model training, and analysis notebooks.
+
+```
+experiments/
+├── configs/
+│   ├── base.py            # BaseExperimentConfig (shared hyperparameters + builders)
+│   ├── mass_action_3s.py  # MassAction3sConfig (random mass-action, ≤3 species)
+│   └── registry.py        # Config registry for CLI --config NAME selection
+├── scripts/
+│   ├── generate_dataset.py  # Generic dataset generation script
+│   └── train.py             # Generic training script
+└── analysis/
+    ├── CRN_Surrogate_MassAction3s.ipynb  # Mass-action 3s experiment notebook
+    ├── evaluate_run.ipynb                 # Post-training evaluation
+    └── illustration.ipynb                 # Architecture/concept illustrations
+```
+
+### Configuration system
+
+Every experiment defines a frozen dataclass inheriting from `BaseExperimentConfig`:
+
+```python
+from experiments.configs.base import BaseExperimentConfig
+from experiments.configs.mass_action_3s import MassAction3sConfig
+
+cfg = MassAction3sConfig()
+print(cfg.max_n_species)   # 3
+print(cfg.d_model)         # 64 (inherited default)
+print(cfg.max_epochs)      # 200 (inherited default)
+
+# Override for quick prototyping
+cfg2 = MassAction3sConfig(max_epochs=10, batch_size=4)
+```
+
+`BaseExperimentConfig` fields:
+
+| Group | Field | Default | Description |
+|-------|-------|---------|-------------|
+| Identity | `experiment_name` | `""` | Artifact/file prefix |
+| | `wandb_project` | `"crn-surrogate"` | W&B project |
+| | `wandb_group` | `""` | W&B run group |
+| Architecture | `max_n_species` | `3` | SDE state dimension (zero-pads smaller CRNs) |
+| | `max_n_reactions` | `6` | SDE noise channels |
+| | `d_model` | `64` | GNN hidden dimension |
+| | `n_encoder_layers` | `3` | Bipartite message-passing rounds |
+| | `d_hidden` | `128` | Drift/diffusion MLP hidden dimension |
+| | `n_sde_hidden_layers` | `2` | FiLM-conditioned hidden layers per MLP |
+| | `d_protocol` | `0` | Protocol embedding dim (0 = disabled) |
+| Training | `n_ssa_samples` | `32` | SSA trajectories per dataset item |
+| | `max_epochs` | `200` | Training epochs |
+| | `batch_size` | `16` | Mini-batch size |
+| | `lr` | `1e-3` | Initial learning rate |
+| | `dt` | `0.1` | Euler-Maruyama step size |
+| | `grad_clip_norm` | `1.0` | Gradient clip threshold |
+| | `scheduler_type` | `"cosine"` | `"cosine"` or `"reduce_on_plateau"` |
+| | `val_every` | `10` | Validation frequency (epochs) |
+
+Builder methods (`build_encoder_config()`, `build_sde_config()`, `build_model_config()`, `build_training_config()`) translate flat config fields into the library's structured config objects.
+
+### Config registry
+
+Configs are registered by name so generic scripts can select them via `--config`:
+
+```python
+# experiments/configs/registry.py
+from experiments.configs.registry import get_config, available_configs
+
+cfg = get_config("mass_action_3s")
+print(available_configs())  # ["mass_action_3s"]
+```
+
+### Generic scripts
+
+**Dataset generation:**
+
+```bash
+# Basic usage
+python experiments/scripts/generate_dataset.py --config mass_action_3s --no-wandb
+
+# With W&B artifact logging, custom output dir, and checkpointing
+python experiments/scripts/generate_dataset.py \
+    --config mass_action_3s \
+    --output-dir experiments/datasets \
+    --checkpoint-every 50 \
+    --seed 42
+
+# Resume interrupted generation from checkpoint
+python experiments/scripts/generate_dataset.py \
+    --config mass_action_3s \
+    --resume-train experiments/datasets/mass_action_3s_v1_train_checkpoint_400.pt \
+    --resume-val   experiments/datasets/mass_action_3s_v1_val_checkpoint_80.pt
+```
+
+The script saves `{experiment_name}_train.pt`, `{experiment_name}_val.pt`, and `{experiment_name}_meta.json` to the output directory. With W&B enabled it also logs a dataset artifact.
+
+**Model training:**
+
+```bash
+# Basic usage
+python experiments/scripts/train.py --config mass_action_3s --no-wandb
+
+# Override epochs, use W&B artifact dataset
+python experiments/scripts/train.py \
+    --config mass_action_3s \
+    --max-epochs 100 \
+    --wandb-artifact mass_action_3s_v1_dataset:latest \
+    --device auto
+```
+
+Flags for both scripts:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config NAME` | `mass_action_3s` | Config to use (must be registered) |
+| `--output-dir DIR` | `experiments/datasets` | Dataset output directory |
+| `--device auto\|cpu\|cuda\|mps` | `auto` | Compute device |
+| `--no-wandb` | off | Disable W&B logging |
+| `--seed N` | `42` | Random seed |
+| `--max-epochs N` | from config | Override `max_epochs` |
+| `--checkpoint-every N` | `50` | Generate-script: save intermediate checkpoint every N items |
+| `--resume-train PATH` | none | Generate-script: resume training split from checkpoint |
+| `--resume-val PATH` | none | Generate-script: resume validation split from checkpoint |
+| `--wandb-artifact REF` | none | Train-script: download dataset from W&B artifact |
+
+### Adding a new experiment
+
+1. Create `experiments/configs/my_experiment.py` subclassing `BaseExperimentConfig`.
+2. Register it in `experiments/configs/registry.py`:
+   ```python
+   from experiments.configs.my_experiment import MyExperimentConfig
+   register("my_experiment", MyExperimentConfig)
+   ```
+3. Run the generic scripts with `--config my_experiment`.
+
+### Implemented experiments
+
+| Config name | Description | Max species | Max reactions |
+|-------------|-------------|-------------|---------------|
+| `mass_action_3s` | Random mass-action CRNs (≤3 species, ≤6 reactions, 500 train / 100 val) | 3 | 6 |
+
 ## Encoder variants
 
 `EncoderConfig.use_attention` selects the message-passing aggregation:
@@ -632,12 +860,9 @@ src/crn_surrogate/
 │   ├── propensities.py       # mass_action, hill, hill_repression,
 │   │                         #   hill_activation_repression, substrate_inhibition,
 │   │                         #   enzyme_michaelis_menten, constant_rate
-│   ├── inputs.py             # PulseEvent, PulseSchedule, InputProtocol, EMPTY_PROTOCOL;
-│   │                         #   single_pulse, repeated_pulse, step_sequence,
-│   │                         #   constant_input, random_protocol, random_input_protocol
-│   └── examples.py           # birth_death, lotka_volterra, schlogl, toggle_switch,
-│                             #   simple_mapk_cascade, birth_death_analytical,
-│                             #   lotka_volterra_analytical
+│   └── inputs.py             # PulseEvent, PulseSchedule, InputProtocol, EMPTY_PROTOCOL;
+│                             #   single_pulse, repeated_pulse, step_sequence,
+│                             #   constant_input, random_protocol, random_input_protocol
 ├── simulation/
 │   ├── gillespie.py          # GillespieSSA (breakpoint-aware, supports InputProtocol)
 │   ├── interpolation.py      # interpolate_to_grid (zero-order hold)
@@ -659,14 +884,21 @@ src/crn_surrogate/
 │   ├── dataset.py            # TrajectoryItem (+ input_protocol, internal_species_mask),
 │   │                         #   CRNTrajectoryDataset, CRNCollator
 │   └── generation/
-│       ├── configs.py        # SamplingConfig, CurationConfig, GenerationConfig
-│       ├── motif_type.py     # MotifType enum (8 elementary + COMPOSED)
-│       ├── motif_registry.py # get_factory() registry lookup
-│       ├── task.py           # GenerationTask, all_elementary_tasks, default_tasks
-│       ├── parameter_sampling.py  # ParameterSampler (log-uniform + rejection sampling)
-│       ├── curation.py       # ViabilityFilter, CurationResult (6 criteria)
-│       ├── composer.py       # CRNComposer, ComposedMotifFactory, CompositionSpec
-│       ├── pipeline.py       # DataGenerationPipeline, DatasetSummary, MotifResult
+│       ├── configs.py              # SamplingConfig, CurationConfig, GenerationConfig
+│       ├── motif_type.py           # MotifType enum (8 elementary + COMPOSED)
+│       ├── motif_registry.py       # get_factory() registry lookup
+│       ├── task.py                 # GenerationTask, all_elementary_tasks, default_tasks
+│       ├── parameter_sampling.py   # ParameterSampler (log-uniform + rejection sampling)
+│       ├── curation.py             # ViabilityFilter, CurationResult (6 criteria)
+│       ├── composer.py             # CRNComposer, ComposedMotifFactory, CompositionSpec
+│       ├── pipeline.py             # DataGenerationPipeline, DatasetSummary, MotifResult
+│       ├── reference_crns.py       # birth_death, lotka_volterra, schlogl,
+│       │                           #   toggle_switch, simple_mapk_cascade
+│       ├── mass_action_topology.py # MassActionTopology, birth_death_topology,
+│       │                           #   lotka_volterra_topology, auto_catalysis_topology,
+│       │                           #   enzymatic_catalysis_topology
+│       ├── random_topology_sampler.py  # RandomTopologySampler, RandomTopologyConfig
+│       ├── mass_action_generator.py    # MassActionCRNGenerator, MassActionGeneratorConfig
 │       └── motifs/
 │           ├── base.py                      # MotifParams, MotifFactory, param_field
 │           ├── birth_death.py               # BirthDeathFactory, BirthDeathParams
@@ -684,19 +916,38 @@ src/crn_surrogate/
 │   ├── trainer.py            # Trainer, TrainingResult
 │   └── profiler.py           # PhaseTimer, ProfileLogger, WandbLogger
 └── evaluation/
+    ├── analytical.py         # birth_death_analytical, lotka_volterra_analytical
     ├── rollout.py            # ModelEvaluator
     ├── dynamics.py           # DynamicsVisualizer, DynamicsProfile
     ├── residuals.py          # ResidualAnalyzer, ResidualReport
     └── trajectory.py         # TrajectoryComparator
 tests/
 notebooks/
-├── 01_simulation.ipynb            # Gillespie SSA walkthrough
-├── 02_training_data.ipynb         # Data generation and curation
-├── 03a_encoder_comparison.ipynb   # Sum vs. attentive message passing
-├── 03b_loss_comparison.ipynb      # GaussianTransitionNLL vs. CombinedTrajectoryLoss
-├── 04_data_generation.ipynb       # Full pipeline demo
-├── 05_external_inputs.ipynb       # PulseSchedule visualization, Gillespie with inputs
-└── 06_neural_sde_with_inputs.ipynb  # Protocol encoding, neural SDE forward pass demo
+├── foundations/
+│   ├── 01_crn_and_simulation.ipynb  # CRN construction, Gillespie SSA
+│   ├── 02_motif_library.ipynb       # Motif factories and parameter sampling
+│   ├── 03_external_inputs.ipynb     # PulseSchedule, Gillespie with external inputs
+│   └── 04_data_pipeline.ipynb       # Full motif-based pipeline demo
+├── model/
+│   ├── 01_encoder.ipynb             # Bipartite GNN encoder
+│   ├── 02_neural_sde.ipynb          # Neural SDE and Euler-Maruyama solver
+│   └── 03_losses.ipynb              # Loss function comparison
+└── experiments/
+    ├── 01_encoder_comparison.ipynb  # Sum vs. attentive message passing
+    ├── 02_loss_comparison.ipynb     # Loss comparison study
+    └── 03_encoder_generalization.ipynb  # Generalization across CRN families
+experiments/
+├── configs/
+│   ├── base.py              # BaseExperimentConfig
+│   ├── mass_action_3s.py    # MassAction3sConfig (random mass-action ≤3 species)
+│   └── registry.py          # Config registry
+├── scripts/
+│   ├── generate_dataset.py  # Generic dataset generation (--config NAME)
+│   └── train.py             # Generic training (--config NAME)
+└── analysis/
+    ├── CRN_Surrogate_MassAction3s.ipynb  # Mass-action 3s experiment
+    ├── evaluate_run.ipynb                 # Post-training evaluation
+    └── illustration.ipynb                 # Architecture illustrations
 ```
 
 ## License
