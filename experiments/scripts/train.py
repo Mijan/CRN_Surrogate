@@ -1,8 +1,12 @@
-"""Train the CRN surrogate on a generated mass-action dataset.
+"""Train the CRN surrogate on a generated dataset.
 
 Usage:
-    python experiments/scripts/train.py [--dataset-dir DIR] [--device auto|cpu|cuda|mps]
-                                        [--no-wandb] [--seed N] [--max-epochs N]
+    python experiments/scripts/train.py [--config NAME]
+                                        [--dataset-dir DIR]
+                                        [--device auto|cpu|cuda|mps]
+                                        [--no-wandb]
+                                        [--seed N]
+                                        [--max-epochs N]
                                         [--wandb-artifact ARTIFACT_REF]
 """
 
@@ -20,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer
-from experiments.configs.mass_action_3s import MassAction3sConfig
+from experiments.configs.registry import available_configs, get_config
 
 
 def _select_device(device_arg: str) -> torch.device:
@@ -44,6 +48,12 @@ def _select_device(device_arg: str) -> torch.device:
 def main() -> None:
     """Parse CLI args and run training."""
     parser = argparse.ArgumentParser(description="Train the CRN surrogate model.")
+    parser.add_argument(
+        "--config",
+        default="mass_action_3s",
+        choices=available_configs(),
+        help="Experiment config name",
+    )
     parser.add_argument("--dataset-dir", default="experiments/datasets")
     parser.add_argument(
         "--device", default="auto", choices=["auto", "cpu", "cuda", "mps"]
@@ -58,7 +68,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    cfg = MassAction3sConfig()
+    cfg = get_config(args.config)
     torch.manual_seed(args.seed)
 
     device = _select_device(args.device)
