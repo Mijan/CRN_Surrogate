@@ -693,7 +693,7 @@ def test_gillespie_external_species_value_changes_at_breakpoint() -> None:
     from crn_surrogate.crn.propensities import mass_action
     from crn_surrogate.crn.reaction import Reaction
     from crn_surrogate.simulation import GillespieSSA
-    from crn_surrogate.simulation.interpolation import TimegridUtils
+    from crn_surrogate.simulation.timegrid_utils import TimegridUtils
 
     # Extremely slow birth so no reactions fire; death is also near-zero
     birth_prop = mass_action(

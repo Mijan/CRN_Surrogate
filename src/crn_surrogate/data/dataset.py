@@ -37,6 +37,9 @@ class TrajectoryItem:
         internal_species_mask: (n_species,) bool tensor; True for internal (non-external)
             species. When None, all species are treated as internal. Precomputed from
             crn.internal_species_mask at data generation time.
+        scale: (n_species,) per-species normalization scale precomputed from
+            ``trajectories``. When None the Trainer computes it on the fly from
+            the trajectories. Storing it avoids repeated recomputation across epochs.
     """
 
     crn_repr: CRNTensorRepr
@@ -48,6 +51,7 @@ class TrajectoryItem:
     params: dict = field(default_factory=dict)
     input_protocol: InputProtocol = field(default_factory=lambda: EMPTY_PROTOCOL)
     internal_species_mask: torch.Tensor | None = None  # (n_species,) bool
+    scale: torch.Tensor | None = None  # (n_species,) normalization scale
 
 
 class CRNTrajectoryDataset(Dataset):
@@ -102,6 +106,7 @@ class CRNCollator:
               cluster_ids:             (B,) int, -1 if unassigned
               input_protocols:         list[InputProtocol] length B
               internal_species_mask:   (B, max_species) bool or None
+              scales:                  (B, max_species) float or None
         """
         max_species = max(item.crn_repr.n_species for item in batch)
         max_rxn = max(item.crn_repr.n_reactions for item in batch)
@@ -129,6 +134,10 @@ class CRNCollator:
             torch.zeros(B, max_species, dtype=torch.bool) if has_internal_mask else None
         )
 
+        # Determine whether any item has a precomputed scale.
+        has_scale = any(item.scale is not None for item in batch)
+        scales_batch = torch.ones(B, max_species) if has_scale else None
+
         for i, item in enumerate(batch):
             ns = item.crn_repr.n_species
             nr = item.crn_repr.n_reactions
@@ -150,6 +159,12 @@ class CRNCollator:
                 else:
                     # No mask provided: treat all real species as internal.
                     internal_species_mask_batch[i, :ns] = True  # type: ignore[index]
+            if has_scale:
+                if item.scale is not None:
+                    scales_batch[i, :ns] = item.scale  # type: ignore[index]
+                else:
+                    # No scale provided: use 1.0 (identity; Trainer will recompute).
+                    scales_batch[i, :ns] = 1.0  # type: ignore[index]
 
         return {
             "stoichiometry": stoich,
@@ -164,4 +179,5 @@ class CRNCollator:
             "cluster_ids": cluster_ids,
             "input_protocols": [item.input_protocol for item in batch],
             "internal_species_mask": internal_species_mask_batch,
+            "scales": scales_batch,
         }

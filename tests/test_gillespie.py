@@ -15,7 +15,7 @@ import torch
 
 from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
 from crn_surrogate.simulation.gillespie import GillespieSSA
-from crn_surrogate.simulation.interpolation import TimegridUtils
+from crn_surrogate.simulation.timegrid_utils import TimegridUtils
 
 # ── GillespieSSA with CRN.evaluate_propensities ────────────────────────────────
 

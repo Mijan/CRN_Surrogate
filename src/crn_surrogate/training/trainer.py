@@ -27,6 +27,7 @@ from crn_surrogate.training.losses import (
     GaussianTransitionNLL,
     TrajectoryLoss,
 )
+from crn_surrogate.training.normalization import TrajectoryNormalizer
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
 
 
@@ -80,7 +81,8 @@ class Trainer:
         self._sde = sde
         self._model_config = model_config
         self._train_config = train_config
-        self._nll_loss = GaussianTransitionNLL()
+        self._nll_loss = GaussianTransitionNLL(min_variance=1e-2)
+        self._normalizer = TrajectoryNormalizer()
         self._rollout_loss = (
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
@@ -236,13 +238,28 @@ class Trainer:
         States are padded to the SDE's configured n_species so that a single model
         handles CRNs with varying numbers of species. When n_species_actual ==
         n_species_sde the padding is a no-op and behaviour is identical to before.
+
+        Trajectories and initial states are normalized per-item per-species before
+        being passed to the encoder and loss. This keeps inputs O(1) regardless of
+        molecule count scale.
         """
         crn_repr = self._reconstruct_tensor_repr(batch, idx)
         n_species_actual = crn_repr.n_species
         n_species_sde = self._sde.n_species
 
-        # Encoder operates on the actual-sized CRN (GNN handles variable topology)
         init_state = batch["initial_states"][idx, :n_species_actual]
+        true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]  # (M, T, ns)
+
+        # ── Per-item normalization ────────────────────────────────────────────
+        precomputed = batch.get("scales")
+        if precomputed is not None:
+            scale = precomputed[idx, :n_species_actual]
+        else:
+            scale = self._normalizer.compute_scale(true_trajs)
+        true_trajs = true_trajs / scale
+        init_state = init_state / scale
+
+        # ── Encode (normalized initial state) ────────────────────────────────
         ctx = self._encoder(crn_repr, init_state)
 
         # Species mask for the SDE's full dimensionality
@@ -251,8 +268,7 @@ class Trainer:
         )
         species_mask[:n_species_actual] = True
 
-        # Pad trajectories to SDE dimensionality
-        true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
+        # Pad normalized trajectories to SDE dimensionality
         M, T, _ = true_trajs.shape
         true_trajs_padded = torch.zeros(M, T, n_species_sde, device=true_trajs.device)
         true_trajs_padded[:, :, :n_species_actual] = true_trajs
@@ -270,7 +286,7 @@ class Trainer:
                 mask=species_mask,
             )
 
-        # Rollout: pad initial state for the solver
+        # Rollout: pad normalized initial state for the solver
         padded_init = torch.zeros(n_species_sde, device=init_state.device)
         padded_init[:n_species_actual] = init_state
         k = self._train_config.n_sde_samples
@@ -352,16 +368,23 @@ class Trainer:
         B = batch["stoichiometry"].shape[0]
         n_species_sde = self._sde.n_species
         total = torch.zeros(1, device=batch["stoichiometry"].device)
+        precomputed = batch.get("scales")
         for idx in range(B):
             crn_repr = self._reconstruct_tensor_repr(batch, idx)
             n_species_actual = crn_repr.n_species
             init_state = batch["initial_states"][idx, :n_species_actual]
+            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
+            if precomputed is not None:
+                scale = precomputed[idx, :n_species_actual]
+            else:
+                scale = self._normalizer.compute_scale(true_trajs)
+            true_trajs = true_trajs / scale
+            init_state = init_state / scale
             ctx = self._encoder(crn_repr, init_state)
             species_mask = torch.zeros(
                 n_species_sde, dtype=torch.bool, device=init_state.device
             )
             species_mask[:n_species_actual] = True
-            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
             M, T, _ = true_trajs.shape
             true_trajs_padded = torch.zeros(
                 M, T, n_species_sde, device=true_trajs.device
@@ -388,16 +411,23 @@ class Trainer:
         B = batch["stoichiometry"].shape[0]
         n_species_sde = self._sde.n_species
         total = torch.zeros(1, device=batch["stoichiometry"].device)
+        precomputed = batch.get("scales")
         for idx in range(B):
             crn_repr = self._reconstruct_tensor_repr(batch, idx)
             n_species_actual = crn_repr.n_species
             init_state = batch["initial_states"][idx, :n_species_actual]
+            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
+            if precomputed is not None:
+                scale = precomputed[idx, :n_species_actual]
+            else:
+                scale = self._normalizer.compute_scale(true_trajs)
+            true_trajs = true_trajs / scale
+            init_state = init_state / scale
             ctx = self._encoder(crn_repr, init_state)
             species_mask = torch.zeros(
                 n_species_sde, dtype=torch.bool, device=init_state.device
             )
             species_mask[:n_species_actual] = True
-            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
             M, T, _ = true_trajs.shape
             true_trajs_padded = torch.zeros(
                 M, T, n_species_sde, device=true_trajs.device

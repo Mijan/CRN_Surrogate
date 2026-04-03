@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from crn_surrogate.simulation.interpolation import TimegridUtils
+from crn_surrogate.simulation.timegrid_utils import TimegridUtils
 
 
 @dataclass
