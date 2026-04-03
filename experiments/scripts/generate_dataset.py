@@ -232,7 +232,6 @@ def _generate_split(
     while len(items) < n_items and stats["n_attempted"] < max_attempts:
         crn = gen.sample()
         crn_repr = crn_to_tensor_repr(crn)
-        stats["n_attempted"] += 1
 
         for _ in range(n_init_conditions):
             if len(items) >= n_items:
@@ -244,6 +243,7 @@ def _generate_split(
                 spread=initial_state_spread,
             )
 
+            stats["n_attempted"] += 1
             traj_tensor = simulate_fn(
                 crn, init_state, t_max, n_trajs_per_init, time_grid, sim_timeout
             )
