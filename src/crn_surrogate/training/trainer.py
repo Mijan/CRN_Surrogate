@@ -117,12 +117,16 @@ class Trainer:
         self,
         train_dataset: CRNTrajectoryDataset,
         val_dataset: CRNTrajectoryDataset | None = None,
+        start_epoch: int = 1,
     ) -> TrainingResult:
         """Run the full training loop.
 
         Args:
             train_dataset: Training trajectories.
             val_dataset: Optional validation trajectories.
+            start_epoch: Epoch to start from (>1 when resuming). Epochs before
+                start_epoch are skipped. The scheduler is NOT stepped for
+                skipped epochs since its state is restored from the checkpoint.
 
         Returns:
             TrainingResult with per-epoch train and val losses.
@@ -136,7 +140,7 @@ class Trainer:
             collate_fn=collator,
         )
 
-        for epoch in range(1, self._train_config.max_epochs + 1):
+        for epoch in range(start_epoch, self._train_config.max_epochs + 1):
             self._timer = PhaseTimer(device=self._timer.device)
             train_loss, mean_grad_norm = self._train_epoch(train_loader, epoch)
             result.train_losses.append(train_loss)
@@ -472,6 +476,32 @@ class Trainer:
         else:
             self._scheduler.step()
 
+    def load_checkpoint(self, checkpoint: dict) -> int:
+        """Restore training state from a checkpoint.
+
+        Loads model weights, optimizer state, scheduler state, and
+        best_val_loss. Returns the next epoch to train (checkpoint epoch + 1).
+
+        Args:
+            checkpoint: Dict loaded from a checkpoint .pt file.
+
+        Returns:
+            The epoch to resume from (checkpoint["epoch"] + 1).
+        """
+        self._encoder.load_state_dict(checkpoint["encoder_state"])
+        self._sde.load_state_dict(checkpoint["sde_state"])
+
+        if "optimizer_state" in checkpoint:
+            self._optimizer.load_state_dict(checkpoint["optimizer_state"])
+        if "scheduler_state" in checkpoint:
+            self._scheduler.load_state_dict(checkpoint["scheduler_state"])
+        if "best_val_loss" in checkpoint:
+            self._best_val_loss = checkpoint["best_val_loss"]
+
+        epoch = checkpoint.get("epoch", 0)
+        print(f"Resumed from epoch {epoch} (best_val_loss={self._best_val_loss:.4f})")
+        return epoch + 1
+
     def _maybe_checkpoint(self, val_loss: float, epoch: int) -> None:
         """Save a checkpoint if validation loss improved."""
         if val_loss < self._best_val_loss:
@@ -485,6 +515,9 @@ class Trainer:
                     "epoch": epoch,
                     "encoder_state": self._encoder.state_dict(),
                     "sde_state": self._sde.state_dict(),
+                    "optimizer_state": self._optimizer.state_dict(),
+                    "scheduler_state": self._scheduler.state_dict(),
+                    "best_val_loss": self._best_val_loss,
                     "val_loss": val_loss,
                 },
                 path,

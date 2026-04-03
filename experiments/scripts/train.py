@@ -8,6 +8,7 @@ Usage:
                                         [--seed N]
                                         [--max-epochs N]
                                         [--wandb-artifact ARTIFACT_REF]
+                                        [--resume PATH|ARTIFACT_REF|auto]
 """
 
 from __future__ import annotations
@@ -25,6 +26,68 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer
 from experiments.configs.registry import available_configs, get_config
+
+
+def _resolve_checkpoint(
+    resume_arg: str,
+    cfg,
+    device: torch.device,
+    use_wandb: bool,
+) -> dict | None:
+    """Resolve a --resume argument to a loaded checkpoint dict.
+
+    Args:
+        resume_arg: One of:
+            - "auto": search W&B for the latest checkpoint artifact
+            - A W&B artifact reference (contains ":" or "/")
+            - A local file path
+        cfg: Experiment config (for constructing artifact names).
+        device: Device to load tensors onto.
+        use_wandb: Whether W&B is available.
+
+    Returns:
+        Loaded checkpoint dict, or None if no checkpoint found.
+    """
+    ckpt_path: Path | None = None
+
+    if resume_arg == "auto" or ":" in resume_arg or "/" in resume_arg:
+        if not use_wandb:
+            print("--resume with W&B artifact requires W&B. Skipping.")
+            return None
+        import wandb
+
+        if resume_arg == "auto":
+            artifact_ref = (
+                f"{cfg.wandb_project}/{cfg.experiment_name}_train_checkpoint:latest"
+            )
+        else:
+            artifact_ref = resume_arg
+
+        try:
+            if wandb.run is not None:
+                artifact = wandb.run.use_artifact(artifact_ref)
+            else:
+                api = wandb.Api()
+                artifact = api.artifact(artifact_ref)
+            artifact_dir = Path(artifact.download())
+            ckpt_files = sorted(artifact_dir.glob("*.pt"))
+            if not ckpt_files:
+                print(f"No .pt files in artifact {artifact_ref}")
+                return None
+            ckpt_path = ckpt_files[-1]
+            label = "auto-resume" if resume_arg == "auto" else "artifact"
+            print(f"Resume ({label}): {artifact_ref} -> {ckpt_path.name}")
+        except Exception as exc:  # wandb.errors.CommError or similar
+            print(f"No checkpoint artifact found ({exc}). Starting fresh.")
+            return None
+    else:
+        ckpt_path = Path(resume_arg)
+        if not ckpt_path.exists():
+            print(f"Checkpoint not found: {ckpt_path}. Starting fresh.")
+            return None
+        print(f"Resume from local: {ckpt_path}")
+
+    return torch.load(ckpt_path, map_location=device, weights_only=False)
 
 
 def _select_device(device_arg: str) -> torch.device:
@@ -65,6 +128,16 @@ def main() -> None:
         "--wandb-artifact",
         default=None,
         help="W&B artifact reference (e.g. 'mass_action_3s_v1_dataset:latest')",
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help=(
+            "Resume from a checkpoint. Accepts: "
+            "(1) local path to a .pt file, "
+            "(2) W&B artifact reference (e.g. 'mass_action_3s_v3_train_checkpoint:latest'), "
+            "(3) 'auto' to automatically find the latest W&B checkpoint for this experiment"
+        ),
     )
     args = parser.parse_args()
 
@@ -135,9 +208,19 @@ def main() -> None:
     print(f"Encoder params: {sum(p.numel() for p in encoder.parameters()):,}")
     print(f"SDE params:     {sum(p.numel() for p in sde.parameters()):,}")
 
-    # ── Train ────────────────────────────────────────────────────────────────
+    # ── Resume from checkpoint if requested ──────────────────────────────────
     trainer = Trainer(encoder, sde, model_config, train_config)
-    result = trainer.train(train_dataset, val_dataset)
+    start_epoch = 1
+    if args.resume:
+        checkpoint = _resolve_checkpoint(args.resume, cfg, device, use_wandb)
+        if checkpoint is not None:
+            start_epoch = trainer.load_checkpoint(checkpoint)
+            print(f"Will resume training from epoch {start_epoch}")
+        else:
+            print("No checkpoint loaded. Starting from scratch.")
+
+    # ── Train ────────────────────────────────────────────────────────────────
+    result = trainer.train(train_dataset, val_dataset, start_epoch=start_epoch)
 
     # ── Save checkpoint as W&B artifact ──────────────────────────────────────
     if use_wandb:

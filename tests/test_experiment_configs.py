@@ -34,12 +34,12 @@ def test_mass_action_3s_v3_sde_config_has_mlp_dropout():
 
 def test_mass_action_3s_v3_dataset_n_train():
     cfg = MassAction3sV3Config()
-    assert cfg.dataset.n_train == 5000
+    assert cfg.dataset.n_train == 50000
 
 
 def test_mass_action_3s_v3_dataset_n_val():
     cfg = MassAction3sV3Config()
-    assert cfg.dataset.n_val == 500
+    assert cfg.dataset.n_val == 5000
 
 
 def test_mass_action_3s_v3_val_every():
