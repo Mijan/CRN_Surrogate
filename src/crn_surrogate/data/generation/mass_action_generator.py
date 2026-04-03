@@ -109,16 +109,18 @@ class RandomTopologySampler:
                 ).item()
             )
             try:
-                reactant_rows, product_rows = self._sample_reaction_rows(
+                reactant_matrix, product_matrix = self._build_matrices(
                     n_species, n_reactions
                 )
-                reactant_rows, product_rows = self._repair(
-                    reactant_rows, product_rows, n_species
+                reactant_matrix, product_matrix = self._repair(
+                    reactant_matrix, product_matrix, n_species
                 )
-                reactant_rows, product_rows = self._dedup(reactant_rows, product_rows)
+                # MassActionTopology.__post_init__ validates no-ops, participation,
+                # and no duplicates — serves as the final safety net.
                 return MassActionTopology(
-                    reactant_matrix=torch.stack(reactant_rows),
-                    product_matrix=torch.stack(product_rows),
+                    reactant_matrix=reactant_matrix,
+                    product_matrix=product_matrix,
+                    species_names=tuple(f"S{i}" for i in range(n_species)),
                 )
             except (ValueError, RuntimeError):
                 continue
@@ -235,21 +237,23 @@ class RandomTopologySampler:
 
         return reactant_vec, product_vec, order
 
-    def _sample_reaction_rows(
+    def _build_matrices(
         self, n_species: int, n_reactions: int
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """Sample reactant and product rows for n_reactions with deduplication.
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Sample reactant and product matrices for n_reactions.
+
+        Deduplicates during sampling (up to 10 retries per reaction).
 
         Args:
             n_species: Number of species.
             n_reactions: Target number of reactions.
 
         Returns:
-            Tuple of (reactant_rows, product_rows) lists of length n_reactions.
+            (reactant_matrix, product_matrix) each of shape (n_reactions, n_species).
         """
         reactant_rows: list[torch.Tensor] = []
         product_rows: list[torch.Tensor] = []
-        seen_pairs: set[tuple] = set()
+        seen_pairs: set[tuple[tuple[float, ...], tuple[float, ...]]] = set()
 
         for _ in range(n_reactions):
             for _ in range(10):  # retry on duplicates
@@ -261,155 +265,138 @@ class RandomTopologySampler:
                     product_rows.append(pv)
                     break
             else:
-                # Accept last sampled even if duplicate; repair/dedup will clean it up
+                # All retries produced duplicates; include last sample anyway.
+                # _repair will dedup after each fix.
                 reactant_rows.append(rv)
                 product_rows.append(pv)
 
-        return reactant_rows, product_rows
-
-    def _find_violations(
-        self,
-        reactant_rows: list[torch.Tensor],
-        product_rows: list[torch.Tensor],
-        n_species: int,
-    ) -> list[tuple[str, int | None]]:
-        """Return list of (kind, data) constraint violations.
-
-        Args:
-            reactant_rows: List of reactant stoichiometry vectors.
-            product_rows: List of product stoichiometry vectors.
-            n_species: Number of species.
-
-        Returns:
-            Ordered list of violations: ('non_participating', s),
-            ('no_production', None), ('no_degradation', s).
-        """
-        cfg = self._config
-        violations: list[tuple[str, int | None]] = []
-        reactant_mat = torch.stack(reactant_rows)
-        product_mat = torch.stack(product_rows)
-        net = product_mat - reactant_mat
-
-        for s in range(n_species):
-            if net[:, s].abs().sum() == 0:
-                violations.append(("non_participating", s))
-
-        if cfg.require_production:
-            orders = reactant_mat.sum(dim=1)
-            if not (orders == 0).any():
-                violations.append(("no_production", None))
-
-        if cfg.require_degradation:
-            for s in range(n_species):
-                if not (net[:, s] < 0).any():
-                    violations.append(("no_degradation", s))
-
-        return violations
-
-    def _fix_one_violation(
-        self,
-        violation: tuple[str, int | None],
-        reactant_rows: list[torch.Tensor],
-        product_rows: list[torch.Tensor],
-        n_species: int,
-    ) -> None:
-        """Apply one in-place repair to satisfy the given violation.
-
-        Args:
-            violation: (kind, data) tuple from _find_violations.
-            reactant_rows: Mutable list of reactant vectors.
-            product_rows: Mutable list of product vectors.
-            n_species: Number of species.
-        """
-        kind, data = violation
-        n_reactions = len(reactant_rows)
-
-        if kind == "non_participating":
-            s = int(data)  # type: ignore[arg-type]
-            # Replace a random reaction with degradation of species s
-            idx = int(torch.randint(0, n_reactions, (1,)).item())
-            rv = torch.zeros(n_species)
-            rv[s] = 1.0
-            reactant_rows[idx] = rv
-            product_rows[idx] = torch.zeros(n_species)
-
-        elif kind == "no_production":
-            # Replace a non-zero-order reaction with zero-order production
-            reactant_mat = torch.stack(reactant_rows)
-            orders = reactant_mat.sum(dim=1)
-            non_zero_idx = (orders > 0).nonzero(as_tuple=True)[0]
-            if len(non_zero_idx) > 0:
-                choice = int(torch.randint(0, len(non_zero_idx), (1,)).item())
-                idx = int(non_zero_idx[choice].item())
-            else:
-                idx = int(torch.randint(0, n_reactions, (1,)).item())
-            s = int(torch.randint(0, n_species, (1,)).item())
-            pv = torch.zeros(n_species)
-            pv[s] = 1.0
-            reactant_rows[idx] = torch.zeros(n_species)
-            product_rows[idx] = pv
-
-        elif kind == "no_degradation":
-            s = int(data)  # type: ignore[arg-type]
-            # Append a degradation reaction for species s
-            rv = torch.zeros(n_species)
-            rv[s] = 1.0
-            reactant_rows.append(rv)
-            product_rows.append(torch.zeros(n_species))
+        return torch.stack(reactant_rows), torch.stack(product_rows)
 
     def _repair(
         self,
-        reactant_rows: list[torch.Tensor],
-        product_rows: list[torch.Tensor],
+        reactant_matrix: torch.Tensor,
+        product_matrix: torch.Tensor,
         n_species: int,
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """Iteratively fix constraint violations until resolved or max passes reached.
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Iterative structural repair on reactant/product matrices.
+
+        Runs up to 10 passes. Each pass fixes one violation, then immediately
+        deduplicates so that constraint checks in subsequent passes see the
+        true (unique) reaction set.
 
         Args:
-            reactant_rows: Mutable list of reactant vectors.
-            product_rows: Mutable list of product vectors.
+            reactant_matrix: (n_reactions, n_species)
+            product_matrix: (n_reactions, n_species)
             n_species: Number of species.
 
         Returns:
-            (reactant_rows, product_rows) after repair.
+            Repaired (reactant_matrix, product_matrix).
 
         Raises:
-            ValueError: If violations remain after 10 passes.
+            ValueError: If repair does not converge in 10 passes.
         """
+        cfg = self._config
+
         for _ in range(10):
-            violations = self._find_violations(reactant_rows, product_rows, n_species)
+            net = product_matrix - reactant_matrix
+            violations: list[tuple[str, int | None]] = []
+
+            for s in range(n_species):
+                if net[:, s].abs().sum() == 0:
+                    violations.append(("inactive_species", s))
+
+            if cfg.require_production:
+                if not (reactant_matrix.sum(dim=1) == 0).any():
+                    violations.append(("no_production", None))
+
+            if cfg.require_degradation:
+                for s in range(n_species):
+                    if not (net[:, s] < 0).any():
+                        violations.append(("no_degradation", s))
+
             if not violations:
                 break
-            self._fix_one_violation(
-                violations[0], reactant_rows, product_rows, n_species
-            )
-        else:
-            violations = self._find_violations(reactant_rows, product_rows, n_species)
-            if violations:
-                raise ValueError(f"Repair did not converge: {violations}")
 
-        return reactant_rows, product_rows
+            kind, species_idx = violations[0]
+            n_rxn = reactant_matrix.shape[0]
+
+            if kind == "inactive_species":
+                s = int(species_idx)  # type: ignore[arg-type]
+                new_r = torch.zeros(1, n_species)
+                new_r[0, s] = 1.0
+                reactant_matrix = torch.cat([reactant_matrix, new_r], dim=0)
+                product_matrix = torch.cat(
+                    [product_matrix, torch.zeros(1, n_species)], dim=0
+                )
+
+            elif kind == "no_production":
+                orders = reactant_matrix.sum(dim=1)
+                non_zero_idx = (orders > 0).nonzero(as_tuple=True)[0]
+                if len(non_zero_idx) > 0:
+                    choice = int(torch.randint(0, len(non_zero_idx), (1,)).item())
+                    idx = int(non_zero_idx[choice].item())
+                else:
+                    idx = int(torch.randint(0, n_rxn, (1,)).item())
+                s = int(torch.randint(0, n_species, (1,)).item())
+                new_r = reactant_matrix.clone()
+                new_p = product_matrix.clone()
+                new_r[idx] = torch.zeros(n_species)
+                new_p[idx] = torch.zeros(n_species)
+                new_p[idx, s] = 1.0
+                reactant_matrix = new_r
+                product_matrix = new_p
+
+            elif kind == "no_degradation":
+                s = int(species_idx)  # type: ignore[arg-type]
+                new_r = torch.zeros(1, n_species)
+                new_r[0, s] = 1.0
+                reactant_matrix = torch.cat([reactant_matrix, new_r], dim=0)
+                product_matrix = torch.cat(
+                    [product_matrix, torch.zeros(1, n_species)], dim=0
+                )
+
+            # Dedup after each fix so subsequent violation checks see the true
+            # unique reaction set.
+            reactant_matrix, product_matrix = self._dedup_matrices(
+                reactant_matrix, product_matrix
+            )
+
+        else:
+            net = product_matrix - reactant_matrix
+            inactive = (net.abs().sum(dim=0) == 0).any()
+            if inactive:
+                raise ValueError("Repair did not converge: inactive species remain")
+
+        return reactant_matrix, product_matrix
 
     @staticmethod
-    def _dedup(
-        reactant_rows: list[torch.Tensor],
-        product_rows: list[torch.Tensor],
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        """Remove duplicate (reactant, product) row pairs, keeping last occurrence.
+    def _dedup_matrices(
+        reactant_matrix: torch.Tensor,
+        product_matrix: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Remove duplicate (reactant, product) row pairs, keeping the first occurrence.
 
         Args:
-            reactant_rows: List of reactant vectors.
-            product_rows: List of product vectors.
+            reactant_matrix: (n_reactions, n_species)
+            product_matrix: (n_reactions, n_species)
 
         Returns:
-            Deduplicated (reactant_rows, product_rows).
+            Deduplicated (reactant_matrix, product_matrix).
         """
-        seen: dict[tuple, int] = {}
-        for i, (rv, pv) in enumerate(zip(reactant_rows, product_rows)):
-            key = (tuple(rv.tolist()), tuple(pv.tolist()))
-            seen[key] = i
-        indices = sorted(seen.values())
-        return [reactant_rows[i] for i in indices], [product_rows[i] for i in indices]
+        seen: set[tuple[tuple[float, ...], tuple[float, ...]]] = set()
+        keep: list[int] = []
+        for r in range(reactant_matrix.shape[0]):
+            key = (
+                tuple(reactant_matrix[r].tolist()),
+                tuple(product_matrix[r].tolist()),
+            )
+            if key not in seen:
+                seen.add(key)
+                keep.append(r)
+        if len(keep) == reactant_matrix.shape[0]:
+            return reactant_matrix, product_matrix
+        idx = torch.tensor(keep, dtype=torch.long)
+        return reactant_matrix[idx], product_matrix[idx]
 
 
 # ── MassActionCRNGenerator ────────────────────────────────────────────────────

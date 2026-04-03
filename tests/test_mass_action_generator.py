@@ -159,3 +159,45 @@ def test_generator_batch():
     assert len(crns) >= 5  # allow some failures
     for crn in crns:
         assert crn.n_species >= 1
+
+
+# ── Duplicate-reaction regression tests ──────────────────────────────────────
+
+
+def test_sampler_no_duplicate_reactions():
+    """RandomTopologySampler produces topologies without duplicate reactions."""
+    torch.manual_seed(0)
+    sampler = RandomTopologySampler(RandomTopologyConfig())
+    for _ in range(50):
+        topo = sampler.sample()
+        seen: set[tuple] = set()
+        for r in range(topo.n_reactions):
+            key = (
+                tuple(topo.reactant_matrix[r].tolist()),
+                tuple(topo.product_matrix[r].tolist()),
+            )
+            assert key not in seen, f"Duplicate reaction at index {r}: {key}"
+            seen.add(key)
+
+
+def test_no_duplicate_production_reactions():
+    """Repair must not create duplicate zero-order production reactions."""
+    torch.manual_seed(0)
+    sampler = RandomTopologySampler(
+        RandomTopologyConfig(
+            n_species_range=(1, 1),
+            n_reactions_range=(2, 4),
+            require_production=True,
+            require_degradation=True,
+        )
+    )
+    for _ in range(100):
+        topo = sampler.sample()
+        seen: set[tuple] = set()
+        for r in range(topo.n_reactions):
+            key = (
+                tuple(topo.reactant_matrix[r].tolist()),
+                tuple(topo.product_matrix[r].tolist()),
+            )
+            assert key not in seen, f"Duplicate at index {r}: {key}"
+            seen.add(key)
