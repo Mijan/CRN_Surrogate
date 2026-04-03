@@ -20,6 +20,7 @@ where = ["src"]
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
 optional-dependencies.test = { file = ["requirements-test.txt"] }
+optional-dependencies.fast = { file = ["requirements-fast.txt"] }
 
 [tool.setuptools_scm]
 version_scheme = "guess-next-dev"

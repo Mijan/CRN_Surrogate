@@ -246,6 +246,11 @@ class _MassActionClosure:
         return self._params
 
     @property
+    def reactant_stoichiometry(self) -> torch.Tensor:
+        """Reactant stoichiometry vector: how many of each species are consumed."""
+        return self._reactant_stoichiometry
+
+    @property
     def species_dependencies(self) -> frozenset[int]:
         """Indices of species that influence this propensity (nonzero reactant order)."""
         return frozenset(

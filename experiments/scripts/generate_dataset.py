@@ -99,14 +99,86 @@ def _simulate_with_timeout(
             return None
 
 
+def _make_simulator(
+    use_fast_ssa: bool,
+    ssa: GillespieSSA,
+    fast_ssa: object | None,
+) -> Callable:
+    """Return a callable (crn, init_state, t_max, n_traj, time_grid, timeout) -> Tensor | None.
+
+    Args:
+        use_fast_ssa: Whether to attempt the Numba-accelerated path.
+        ssa: Standard Gillespie SSA simulator (always available as fallback).
+        fast_ssa: FastMassActionSSA instance, or None if unavailable.
+
+    Returns:
+        Callable that runs SSA and returns a (n_traj, T, n_species) tensor,
+        or None if the simulation times out.
+    """
+    from crn_surrogate.simulation.fast_ssa import FastMassActionSSA
+
+    def _simulate_standard(crn, init_state, t_max, n_traj, time_grid, timeout):
+        trajs = _simulate_with_timeout(
+            ssa,
+            timeout,
+            stoichiometry=crn.stoichiometry_matrix,
+            propensity_fn=crn.evaluate_propensities,
+            initial_state=init_state,
+            t_max=t_max,
+            n_trajectories=n_traj,
+            n_workers=1,
+        )
+        if trajs is None:
+            return None
+        return Trajectory.stack_on_grid(trajs, time_grid)
+
+    def _simulate_fast(crn, init_state, t_max, n_traj, time_grid, timeout):
+        try:
+            arrays = FastMassActionSSA.extract_topology_arrays(crn)
+        except (AttributeError, ValueError):
+            return _simulate_standard(crn, init_state, t_max, n_traj, time_grid, timeout)
+
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FuturesTimeout
+
+        if timeout <= 0:
+            return fast_ssa.simulate_batch(
+                stoichiometry=arrays["stoichiometry"],
+                reactant_matrix=arrays["reactant_matrix"],
+                rate_constants=arrays["rate_constants"],
+                initial_state=init_state,
+                t_max=t_max,
+                time_grid=time_grid,
+                n_trajectories=n_traj,
+            )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(
+                fast_ssa.simulate_batch,
+                stoichiometry=arrays["stoichiometry"],
+                reactant_matrix=arrays["reactant_matrix"],
+                rate_constants=arrays["rate_constants"],
+                initial_state=init_state,
+                t_max=t_max,
+                time_grid=time_grid,
+                n_trajectories=n_traj,
+            )
+            try:
+                return future.result(timeout=timeout)
+            except FuturesTimeout:
+                return None
+
+    if use_fast_ssa and fast_ssa is not None:
+        return _simulate_fast
+    return _simulate_standard
+
+
 def _generate_split(
     gen: MassActionCRNGenerator,
-    ssa: GillespieSSA,
+    simulate_fn: Callable,
     time_grid: torch.Tensor,
     *,
     n_items: int,
     n_ssa_trajectories: int,
-    n_workers: int,
     initial_state_mean: float,
     initial_state_spread: float,
     t_max: float,
@@ -121,11 +193,11 @@ def _generate_split(
 
     Args:
         gen: Configured CRN generator.
-        ssa: Gillespie SSA simulator.
+        simulate_fn: Callable (crn, init_state, t_max, n_traj, time_grid, timeout)
+            -> (n_traj, T, n_species) tensor or None on timeout.
         time_grid: (T,) shared time grid for all trajectories.
         n_items: Target number of items to generate.
         n_ssa_trajectories: SSA trajectories per CRN (split across init conditions).
-        n_workers: Parallel workers for SSA simulation (unused inside timeout wrapper).
         initial_state_mean: Geometric mean of initial molecule counts.
         initial_state_spread: Geometric standard deviation for initial states.
         t_max: Simulation end time.
@@ -172,22 +244,14 @@ def _generate_split(
                 spread=initial_state_spread,
             )
 
-            trajectories_list = _simulate_with_timeout(
-                ssa,
-                sim_timeout,
-                stoichiometry=crn.stoichiometry_matrix,
-                propensity_fn=crn.evaluate_propensities,
-                initial_state=init_state,
-                t_max=t_max,
-                n_trajectories=n_trajs_per_init,
-                n_workers=1,
+            traj_tensor = simulate_fn(
+                crn, init_state, t_max, n_trajs_per_init, time_grid, sim_timeout
             )
-            if trajectories_list is None:
+            if traj_tensor is None:
                 stats["n_timeout"] += 1
                 pbar.set_postfix(timeouts=stats["n_timeout"])
                 continue
 
-            traj_tensor = Trajectory.stack_on_grid(trajectories_list, time_grid)
             result = filter_.check(traj_tensor)
 
             if not result.viable:
@@ -265,6 +329,7 @@ def generate(
     checkpoint_every: int,
     sim_timeout: int = 30,
     n_init_conditions: int = 1,
+    use_fast_ssa: bool = True,
     resume_train: Path | None = None,
     resume_val: Path | None = None,
 ) -> None:
@@ -278,6 +343,7 @@ def generate(
         checkpoint_every: Save intermediate dataset every N accepted items.
         sim_timeout: Per-CRN wall-clock timeout in seconds (0 to disable).
         n_init_conditions: Number of distinct initial conditions per CRN topology.
+        use_fast_ssa: Whether to attempt the Numba-accelerated fast SSA path.
         resume_train: Optional checkpoint path to resume training split from.
         resume_val: Optional checkpoint path to resume validation split from.
     """
@@ -298,6 +364,37 @@ def generate(
     time_grid = torch.linspace(0.0, cfg.dataset.t_max, cfg.dataset.n_time_points)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Set up fast SSA if available and requested
+    fast_ssa = None
+    if use_fast_ssa:
+        try:
+            from crn_surrogate.simulation.fast_ssa import (
+                NUMBA_AVAILABLE,
+                FastMassActionSSA,
+                _gillespie_mass_action_inner,
+            )
+            if not NUMBA_AVAILABLE:
+                print("Numba not available, using standard SSA")
+                use_fast_ssa = False
+            else:
+                fast_ssa = FastMassActionSSA()
+                print("Using Numba-accelerated SSA")
+                print("Warming up Numba JIT (first call compiles)...")
+                import numpy as np
+                _gillespie_mass_action_inner(
+                    np.zeros((2, 1), dtype=np.float64),
+                    np.zeros((2, 1), dtype=np.float64),
+                    np.ones(2, dtype=np.float64),
+                    np.array([1.0], dtype=np.float64),
+                    1.0, 100, 42,
+                )
+                print("JIT warm-up complete")
+        except ImportError:
+            print("fast_ssa module not available, using standard SSA")
+            use_fast_ssa = False
+
+    simulate_fn = _make_simulator(use_fast_ssa, ssa, fast_ssa)
+
     resume_train_items = None
     if resume_train is not None:
         loaded = torch.load(resume_train, weights_only=False)
@@ -312,10 +409,9 @@ def generate(
 
     print(f"Generating {cfg.dataset.n_train} training items...")
     train_items, train_meta = _generate_split(
-        gen, ssa, time_grid,
+        gen, simulate_fn, time_grid,
         n_items=cfg.dataset.n_train,
         n_ssa_trajectories=cfg.dataset.n_ssa_trajectories,
-        n_workers=cfg.dataset.n_workers,
         initial_state_mean=cfg.dataset.initial_state_mean,
         initial_state_spread=cfg.dataset.initial_state_spread,
         t_max=cfg.dataset.t_max,
@@ -329,10 +425,9 @@ def generate(
 
     print(f"Generating {cfg.dataset.n_val} validation items...")
     val_items, val_meta = _generate_split(
-        gen, ssa, time_grid,
+        gen, simulate_fn, time_grid,
         n_items=cfg.dataset.n_val,
         n_ssa_trajectories=cfg.dataset.n_ssa_trajectories,
-        n_workers=cfg.dataset.n_workers,
         initial_state_mean=cfg.dataset.initial_state_mean,
         initial_state_spread=cfg.dataset.initial_state_spread,
         t_max=cfg.dataset.t_max,
@@ -417,6 +512,11 @@ def main() -> None:
         default=1,
         help="Number of distinct initial conditions per CRN (trajectories split across them)",
     )
+    parser.add_argument(
+        "--no-fast-ssa",
+        action="store_true",
+        help="Disable Numba-accelerated SSA (use standard GillespieSSA)",
+    )
     args = parser.parse_args()
 
     cfg = get_config(args.config)
@@ -428,6 +528,7 @@ def main() -> None:
         checkpoint_every=args.checkpoint_every,
         sim_timeout=args.sim_timeout,
         n_init_conditions=args.n_init_conditions,
+        use_fast_ssa=not args.no_fast_ssa,
         resume_train=Path(args.resume_train) if args.resume_train else None,
         resume_val=Path(args.resume_val) if args.resume_val else None,
     )
