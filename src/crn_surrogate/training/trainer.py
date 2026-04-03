@@ -489,3 +489,13 @@ class Trainer:
                 },
                 path,
             )
+            if self._wandb is not None:
+                import wandb
+
+                artifact = wandb.Artifact(
+                    name=f"{self._train_config.wandb_run_name}_checkpoint",
+                    type="model-checkpoint",
+                    metadata={"epoch": epoch, "val_loss": val_loss},
+                )
+                artifact.add_file(path)
+                wandb.log_artifact(artifact)
