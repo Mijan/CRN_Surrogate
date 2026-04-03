@@ -1,79 +1,97 @@
-"""Random mass-action CRN generator for multi-topology training.
+"""Random mass-action CRN generator.
 
-Generates chemically plausible random CRNs with configurable structural
-constraints (production, degradation, species participation).
+Separates topology sampling (RandomTopologySampler) from rate assignment
+(MassActionCRNGenerator), making it easy to work with both random and named
+topologies.
 """
 
 from __future__ import annotations
 
 import math
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
 from crn_surrogate.crn.crn import CRN
-from crn_surrogate.crn.propensities import (
-    ConstantRateParams,
-    SerializablePropensity,
-    constant_rate,
-    mass_action,
-)
-from crn_surrogate.crn.reaction import Reaction
+from crn_surrogate.data.generation.mass_action_topology import MassActionTopology
 
-__all__ = ["MassActionCRNGenerator", "MassActionGeneratorConfig"]
+__all__ = [
+    "MassActionCRNGenerator",
+    "MassActionGeneratorConfig",
+    "RandomTopologyConfig",
+    "RandomTopologySampler",
+]
+
+# Biologically motivated order weights: [P(order=0), P(order=1), P(order=2)]
+_ORDER_WEIGHTS: list[float] = [0.15, 0.55, 0.30]
+
+
+# ── Config dataclasses ────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
-class MassActionGeneratorConfig:
-    """Configuration for random mass-action CRN generation.
+class RandomTopologyConfig:
+    """Configuration for random mass-action topology sampling.
 
     Attributes:
         n_species_range: Inclusive (min, max) number of species.
         n_reactions_range: Inclusive (min, max) number of reactions.
-        max_reactant_order: Maximum total reactant order
-            (0=constant, 1=unimolecular, 2=bimolecular).
+        max_reactant_order: Maximum total reactant order per reaction.
         max_product_count: Max total product molecules per reaction.
-        rate_constant_range: Log-uniform sampling range for rate constants.
-        require_production: At least one zero-order (constitutive) reaction.
-        require_degradation: Every species has at least one net-negative reaction.
-        max_attempts: Max retries before raising RuntimeError.
+        require_production: At least one zero-order production reaction.
+        require_degradation: Every species has a net-negative reaction.
+        max_attempts: Max retries per sample() call.
     """
 
     n_species_range: tuple[int, int] = (1, 3)
     n_reactions_range: tuple[int, int] = (2, 6)
     max_reactant_order: int = 2
     max_product_count: int = 2
-    rate_constant_range: tuple[float, float] = (0.01, 10.0)
     require_production: bool = True
     require_degradation: bool = True
     max_attempts: int = 100
 
 
-# Biologically motivated order weights: [P(order=0), P(order=1), P(order=2)]
-_ORDER_WEIGHTS: list[float] = [0.15, 0.55, 0.30]
+@dataclass(frozen=True)
+class MassActionGeneratorConfig:
+    """Configuration for mass-action CRN generation.
 
+    Combines topology sampling config with rate constant sampling range.
 
-class MassActionCRNGenerator:
-    """Generates random mass-action CRNs within configurable constraints.
-
-    Each call to sample() produces a structurally valid CRN satisfying the
-    configured requirements (production, degradation, species participation,
-    no duplicate reactions). The generator uses torch RNG so results are
-    reproducible under torch.manual_seed().
+    Attributes:
+        topology: Configuration for the random topology sampler.
+        rate_constant_range: Log-uniform range for rate constant sampling.
     """
 
-    def __init__(self, config: MassActionGeneratorConfig) -> None:
+    topology: RandomTopologyConfig = field(default_factory=RandomTopologyConfig)
+    rate_constant_range: tuple[float, float] = (0.01, 10.0)
+
+
+# ── RandomTopologySampler ─────────────────────────────────────────────────────
+
+
+class RandomTopologySampler:
+    """Samples random MassActionTopology instances with structural constraints.
+
+    Samples reaction vectors independently, then applies iterative structural
+    repair until all configured constraints are satisfied or max_attempts
+    is reached.
+
+    Uses torch RNG for reproducibility under torch.manual_seed().
+    """
+
+    def __init__(self, config: RandomTopologyConfig) -> None:
         """Args:
-        config: Generator configuration.
+        config: Topology sampling configuration.
         """
         self._config = config
 
-    def sample(self) -> CRN:
-        """Sample a single valid CRN.
+    def sample(self) -> MassActionTopology:
+        """Sample a single valid topology.
 
         Returns:
-            A randomly generated mass-action CRN.
+            A structurally valid MassActionTopology.
 
         Raises:
             RuntimeError: If constraints cannot be satisfied within max_attempts.
@@ -84,31 +102,38 @@ class MassActionCRNGenerator:
                 torch.randint(cfg.n_species_range[0], cfg.n_species_range[1] + 1, (1,)).item()
             )
             n_reactions = int(
-                torch.randint(cfg.n_reactions_range[0], cfg.n_reactions_range[1] + 1, (1,)).item()
+                torch.randint(
+                    cfg.n_reactions_range[0], cfg.n_reactions_range[1] + 1, (1,)
+                ).item()
             )
             try:
-                reactions = self._build_reactions(n_species, n_reactions)
-                reactions = self._repair_constraints(reactions, n_species)
-                return CRN(
-                    reactions=reactions,
-                    species_names=tuple(f"S{i}" for i in range(n_species)),
+                reactant_rows, product_rows = self._sample_reaction_rows(
+                    n_species, n_reactions
+                )
+                reactant_rows, product_rows = self._repair(
+                    reactant_rows, product_rows, n_species
+                )
+                reactant_rows, product_rows = self._dedup(reactant_rows, product_rows)
+                return MassActionTopology(
+                    reactant_matrix=torch.stack(reactant_rows),
+                    product_matrix=torch.stack(product_rows),
                 )
             except (ValueError, RuntimeError):
                 continue
 
         raise RuntimeError(
-            f"MassActionCRNGenerator failed to produce a valid CRN after "
-            f"{cfg.max_attempts} attempts. Check config constraints."
+            f"RandomTopologySampler failed after {cfg.max_attempts} attempts. "
+            "Check config constraints."
         )
 
-    def sample_batch(self, n: int) -> list[CRN]:
-        """Sample a batch of CRNs.
+    def sample_batch(self, n: int) -> list[MassActionTopology]:
+        """Sample n topologies, warning on partial failures.
 
         Args:
-            n: Target number of CRNs to generate.
+            n: Target number of topologies to generate.
 
         Returns:
-            List of generated CRNs. May be shorter than n if some attempts fail.
+            List of MassActionTopology instances.
 
         Raises:
             RuntimeError: If more than half of n attempts fail.
@@ -122,34 +147,13 @@ class MassActionCRNGenerator:
                 failures += 1
         if len(results) < n // 2:
             raise RuntimeError(
-                f"Generator failed on {failures}/{n} attempts. Check config."
+                f"Sampler failed on {failures}/{n} attempts. Check config."
             )
         if failures > 0:
             warnings.warn(
-                f"Generator failed on {failures}/{n} attempts.", RuntimeWarning, stacklevel=2
+                f"Sampler failed on {failures}/{n} attempts.", RuntimeWarning, stacklevel=2
             )
         return results
-
-    def sample_initial_state(
-        self,
-        crn: CRN,
-        mean_molecules: float = 10.0,
-        spread: float = 2.0,
-    ) -> torch.Tensor:
-        """Sample a log-normally distributed initial state.
-
-        Args:
-            crn: The CRN whose species count determines the output shape.
-            mean_molecules: Geometric mean of molecule counts.
-            spread: Geometric standard deviation (multiplicative spread).
-
-        Returns:
-            (n_species,) tensor of non-negative rounded molecule counts.
-        """
-        log_counts = (
-            torch.randn(crn.n_species) * math.log(spread) + math.log(mean_molecules)
-        )
-        return log_counts.exp().round().clamp(min=0.0)
 
     # ── Private helpers ──────────────────────────────────────────────────────
 
@@ -166,14 +170,6 @@ class MassActionCRNGenerator:
                 return i
         return max_order
 
-    def _sample_rate_constant(self) -> float:
-        """Sample a rate constant log-uniformly from rate_constant_range."""
-        low, high = self._config.rate_constant_range
-        log_rate = (
-            torch.rand(1).item() * (math.log(high) - math.log(low)) + math.log(low)
-        )
-        return math.exp(log_rate)
-
     def _sample_product_vec(
         self, n_species: int, reactant_vec: torch.Tensor
     ) -> torch.Tensor:
@@ -184,7 +180,7 @@ class MassActionCRNGenerator:
             reactant_vec: (n_species,) reactant stoichiometry.
 
         Returns:
-            (n_species,) product stoichiometry with net change != 0.
+            (n_species,) product stoichiometry with net != 0.
         """
         max_products = self._config.max_product_count
         for _ in range(20):
@@ -210,7 +206,7 @@ class MassActionCRNGenerator:
             n_species: Number of species.
 
         Returns:
-            Tuple of reactant_vec (n_species,), product_vec (n_species,), order int.
+            Tuple of (reactant_vec, product_vec, order).
         """
         order = self._sample_order()
         reactant_vec = torch.zeros(n_species)
@@ -224,7 +220,6 @@ class MassActionCRNGenerator:
             reactant_vec[s] = 1.0
             product_vec = self._sample_product_vec(n_species, reactant_vec)
         else:
-            # Order 2: dimerization or two distinct species
             if torch.rand(1).item() < 0.5 or n_species == 1:
                 s = int(torch.randint(0, n_species, (1,)).item())
                 reactant_vec[s] = 2.0
@@ -236,159 +231,288 @@ class MassActionCRNGenerator:
 
         return reactant_vec, product_vec, order
 
-    def _build_reactions(self, n_species: int, n_reactions: int) -> list[Reaction]:
-        """Build a list of reactions with deduplication.
+    def _sample_reaction_rows(
+        self, n_species: int, n_reactions: int
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """Sample reactant and product rows for n_reactions with deduplication.
 
         Args:
             n_species: Number of species.
             n_reactions: Target number of reactions.
 
         Returns:
-            List of Reaction objects.
+            Tuple of (reactant_rows, product_rows) lists of length n_reactions.
         """
-        reactions: list[Reaction] = []
+        reactant_rows: list[torch.Tensor] = []
+        product_rows: list[torch.Tensor] = []
         seen_pairs: set[tuple] = set()
 
         for _ in range(n_reactions):
             for _ in range(10):  # retry on duplicates
-                reactant_vec, product_vec, order = self._sample_reaction_vecs(n_species)
-                pair = (
-                    tuple(reactant_vec.tolist()),
-                    tuple(product_vec.tolist()),
-                )
+                rv, pv, _ = self._sample_reaction_vecs(n_species)
+                pair = (tuple(rv.tolist()), tuple(pv.tolist()))
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
+                    reactant_rows.append(rv)
+                    product_rows.append(pv)
                     break
-
-            net_stoich = product_vec - reactant_vec
-            rate = self._sample_rate_constant()
-
-            if order == 0:
-                propensity = constant_rate(k=rate)
             else:
-                propensity = mass_action(
-                    rate_constant=rate,
-                    reactant_stoichiometry=reactant_vec,
-                )
+                # Accept last sampled even if duplicate; repair/dedup will clean it up
+                reactant_rows.append(rv)  # type: ignore[possibly-undefined]
+                product_rows.append(pv)  # type: ignore[possibly-undefined]
 
-            reactions.append(Reaction(stoichiometry=net_stoich, propensity=propensity))
+        return reactant_rows, product_rows
 
-        return reactions
-
-    def _has_production(self, reactions: list[Reaction]) -> bool:
-        """Return True if any reaction has a constant-rate (zero-order) propensity."""
-        for rxn in reactions:
-            if isinstance(rxn.propensity, SerializablePropensity):
-                if isinstance(rxn.propensity.params, ConstantRateParams):
-                    return True
-        return False
-
-    def _degraded_species(self, reactions: list[Reaction], n_species: int) -> set[int]:
-        """Return indices of species that have net-negative stoichiometry somewhere."""
-        degraded: set[int] = set()
-        for rxn in reactions:
-            for s in range(n_species):
-                if rxn.stoichiometry[s].item() < 0:
-                    degraded.add(s)
-        return degraded
-
-    def _participating_species(
-        self, reactions: list[Reaction], n_species: int
-    ) -> set[int]:
-        """Return indices of species that appear in any reaction's net stoichiometry."""
-        participating: set[int] = set()
-        for rxn in reactions:
-            for s in range(n_species):
-                if rxn.stoichiometry[s].item() != 0:
-                    participating.add(s)
-        return participating
-
-    def _reaction_key(self, rxn: Reaction) -> tuple:
-        """Compute a deduplication key for a reaction.
-
-        Uses (net_stoichiometry, species_dependencies) as the key.
-        Two reactions with the same net change and the same influencing species
-        are considered duplicates.
+    def _find_violations(
+        self,
+        reactant_rows: list[torch.Tensor],
+        product_rows: list[torch.Tensor],
+        n_species: int,
+    ) -> list[tuple[str, int | None]]:
+        """Return list of (kind, data) constraint violations.
 
         Args:
-            rxn: Reaction to key.
-
-        Returns:
-            Hashable key tuple.
-        """
-        stoich_key = tuple(rxn.stoichiometry.tolist())
-        if isinstance(rxn.propensity, SerializablePropensity):
-            deps_key = tuple(sorted(rxn.propensity.species_dependencies))
-        else:
-            deps_key = ()
-        return (stoich_key, deps_key)
-
-    def _dedup_reactions(self, reactions: list[Reaction]) -> list[Reaction]:
-        """Remove duplicate reactions, keeping the last occurrence of each key."""
-        seen: dict[tuple, int] = {}
-        for i, rxn in enumerate(reactions):
-            seen[self._reaction_key(rxn)] = i
-        return [reactions[i] for i in sorted(seen.values())]
-
-    def _repair_constraints(
-        self, reactions: list[Reaction], n_species: int
-    ) -> list[Reaction]:
-        """Apply post-hoc structural repairs to satisfy configured constraints.
-
-        Args:
-            reactions: Initial list of reactions to repair.
+            reactant_rows: List of reactant stoichiometry vectors.
+            product_rows: List of product stoichiometry vectors.
             n_species: Number of species.
 
         Returns:
-            Repaired list of reactions (deduplicated after each repair step).
+            Ordered list of violations: ('non_participating', s),
+            ('no_production', None), ('no_degradation', s).
         """
         cfg = self._config
-        reactions = list(reactions)
+        violations: list[tuple[str, int | None]] = []
+        reactant_mat = torch.stack(reactant_rows)
+        product_mat = torch.stack(product_rows)
+        net = product_mat - reactant_mat
 
-        # Ensure every species participates in at least one reaction
-        participating = self._participating_species(reactions, n_species)
         for s in range(n_species):
-            if s not in participating:
-                reactant_vec = torch.zeros(n_species)
-                reactant_vec[s] = 1.0
-                net_stoich = -reactant_vec
-                rate = self._sample_rate_constant()
-                propensity = mass_action(
-                    rate_constant=rate, reactant_stoichiometry=reactant_vec
-                )
-                replace_idx = int(torch.randint(0, len(reactions), (1,)).item())
-                reactions[replace_idx] = Reaction(
-                    stoichiometry=net_stoich, propensity=propensity
-                )
+            if (net[:, s].abs().sum() == 0):
+                violations.append(("non_participating", s))
 
-        # Ensure at least one zero-order production reaction
-        if cfg.require_production and not self._has_production(reactions):
-            s = int(torch.randint(0, n_species, (1,)).item())
-            rate = self._sample_rate_constant()
-            net_stoich = torch.zeros(n_species)
-            net_stoich[s] = 1.0
-            replace_idx = int(torch.randint(0, len(reactions), (1,)).item())
-            reactions[replace_idx] = Reaction(
-                stoichiometry=net_stoich, propensity=constant_rate(k=rate)
-            )
+        if cfg.require_production:
+            orders = reactant_mat.sum(dim=1)
+            if not (orders == 0).any():
+                violations.append(("no_production", None))
 
-        # Ensure every species has at least one degradation path
         if cfg.require_degradation:
-            degraded = self._degraded_species(reactions, n_species)
             for s in range(n_species):
-                if s not in degraded:
-                    reactant_vec = torch.zeros(n_species)
-                    reactant_vec[s] = 1.0
-                    net_stoich = -reactant_vec
-                    rate = self._sample_rate_constant()
-                    reactions.append(
-                        Reaction(
-                            stoichiometry=net_stoich,
-                            propensity=mass_action(
-                                rate_constant=rate,
-                                reactant_stoichiometry=reactant_vec,
-                            ),
-                        )
-                    )
+                if not (net[:, s] < 0).any():
+                    violations.append(("no_degradation", s))
 
-        return self._dedup_reactions(reactions)
+        return violations
+
+    def _fix_one_violation(
+        self,
+        violation: tuple[str, int | None],
+        reactant_rows: list[torch.Tensor],
+        product_rows: list[torch.Tensor],
+        n_species: int,
+    ) -> None:
+        """Apply one in-place repair to satisfy the given violation.
+
+        Args:
+            violation: (kind, data) tuple from _find_violations.
+            reactant_rows: Mutable list of reactant vectors.
+            product_rows: Mutable list of product vectors.
+            n_species: Number of species.
+        """
+        kind, data = violation
+        n_reactions = len(reactant_rows)
+
+        if kind == "non_participating":
+            s = int(data)  # type: ignore[arg-type]
+            # Replace a random reaction with degradation of species s
+            idx = int(torch.randint(0, n_reactions, (1,)).item())
+            rv = torch.zeros(n_species)
+            rv[s] = 1.0
+            reactant_rows[idx] = rv
+            product_rows[idx] = torch.zeros(n_species)
+
+        elif kind == "no_production":
+            # Replace a non-zero-order reaction with zero-order production
+            reactant_mat = torch.stack(reactant_rows)
+            orders = reactant_mat.sum(dim=1)
+            non_zero_idx = (orders > 0).nonzero(as_tuple=True)[0]
+            if len(non_zero_idx) > 0:
+                choice = int(torch.randint(0, len(non_zero_idx), (1,)).item())
+                idx = int(non_zero_idx[choice].item())
+            else:
+                idx = int(torch.randint(0, n_reactions, (1,)).item())
+            s = int(torch.randint(0, n_species, (1,)).item())
+            pv = torch.zeros(n_species)
+            pv[s] = 1.0
+            reactant_rows[idx] = torch.zeros(n_species)
+            product_rows[idx] = pv
+
+        elif kind == "no_degradation":
+            s = int(data)  # type: ignore[arg-type]
+            # Append a degradation reaction for species s
+            rv = torch.zeros(n_species)
+            rv[s] = 1.0
+            reactant_rows.append(rv)
+            product_rows.append(torch.zeros(n_species))
+
+    def _repair(
+        self,
+        reactant_rows: list[torch.Tensor],
+        product_rows: list[torch.Tensor],
+        n_species: int,
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """Iteratively fix constraint violations until resolved or max passes reached.
+
+        Args:
+            reactant_rows: Mutable list of reactant vectors.
+            product_rows: Mutable list of product vectors.
+            n_species: Number of species.
+
+        Returns:
+            (reactant_rows, product_rows) after repair.
+
+        Raises:
+            ValueError: If violations remain after 10 passes.
+        """
+        for _ in range(10):
+            violations = self._find_violations(reactant_rows, product_rows, n_species)
+            if not violations:
+                break
+            self._fix_one_violation(violations[0], reactant_rows, product_rows, n_species)
+        else:
+            violations = self._find_violations(reactant_rows, product_rows, n_species)
+            if violations:
+                raise ValueError(f"Repair did not converge: {violations}")
+
+        return reactant_rows, product_rows
+
+    @staticmethod
+    def _dedup(
+        reactant_rows: list[torch.Tensor],
+        product_rows: list[torch.Tensor],
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        """Remove duplicate (reactant, product) row pairs, keeping last occurrence.
+
+        Args:
+            reactant_rows: List of reactant vectors.
+            product_rows: List of product vectors.
+
+        Returns:
+            Deduplicated (reactant_rows, product_rows).
+        """
+        seen: dict[tuple, int] = {}
+        for i, (rv, pv) in enumerate(zip(reactant_rows, product_rows)):
+            key = (tuple(rv.tolist()), tuple(pv.tolist()))
+            seen[key] = i
+        indices = sorted(seen.values())
+        return [reactant_rows[i] for i in indices], [product_rows[i] for i in indices]
+
+
+# ── MassActionCRNGenerator ────────────────────────────────────────────────────
+
+
+class MassActionCRNGenerator:
+    """Generates random mass-action CRNs by composing topology + rate sampling.
+
+    Works with random topologies (via RandomTopologySampler) or named topologies
+    (via sample_from_topology).
+    """
+
+    def __init__(self, config: MassActionGeneratorConfig) -> None:
+        """Args:
+        config: Generator configuration (topology + rate constant range).
+        """
+        self._config = config
+        self._topology_sampler = RandomTopologySampler(config.topology)
+
+    def sample(self) -> CRN:
+        """Sample a random topology and assign random rate constants.
+
+        Returns:
+            A fully specified CRN.
+
+        Raises:
+            RuntimeError: Propagated from the topology sampler on failure.
+        """
+        topology = self._topology_sampler.sample()
+        rates = self._sample_rates(topology.n_reactions)
+        return topology.to_crn(rates)
+
+    def sample_batch(self, n: int) -> list[CRN]:
+        """Sample n CRNs, warning on partial failures.
+
+        Args:
+            n: Target number of CRNs.
+
+        Returns:
+            List of CRN instances.
+
+        Raises:
+            RuntimeError: If more than half of n attempts fail.
+        """
+        results = []
+        failures = 0
+        for _ in range(n):
+            try:
+                results.append(self.sample())
+            except RuntimeError:
+                failures += 1
+        if len(results) < n // 2:
+            raise RuntimeError(
+                f"Generator failed on {failures}/{n} attempts. Check config."
+            )
+        if failures > 0:
+            warnings.warn(
+                f"Generator failed on {failures}/{n} attempts.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        return results
+
+    def sample_from_topology(self, topology: MassActionTopology) -> CRN:
+        """Assign random rate constants to a given topology.
+
+        Args:
+            topology: A MassActionTopology defining the reaction structure.
+
+        Returns:
+            A fully specified CRN with randomly sampled rate constants.
+        """
+        rates = self._sample_rates(topology.n_reactions)
+        return topology.to_crn(rates)
+
+    def sample_initial_state(
+        self,
+        crn: CRN,
+        mean_molecules: float = 10.0,
+        spread: float = 2.0,
+    ) -> torch.Tensor:
+        """Sample a log-normally distributed initial state.
+
+        Args:
+            crn: The CRN whose species count determines the output shape.
+            mean_molecules: Geometric mean of molecule counts.
+            spread: Geometric standard deviation.
+
+        Returns:
+            (n_species,) tensor of non-negative rounded molecule counts.
+        """
+        log_counts = (
+            torch.randn(crn.n_species) * math.log(spread) + math.log(mean_molecules)
+        )
+        return log_counts.exp().round().clamp(min=0.0)
+
+    def _sample_rates(self, n: int) -> list[float]:
+        """Sample n rate constants log-uniformly from rate_constant_range.
+
+        Args:
+            n: Number of rate constants to sample.
+
+        Returns:
+            List of n positive floats.
+        """
+        low, high = self._config.rate_constant_range
+        return [
+            math.exp(
+                torch.rand(1).item() * (math.log(high) - math.log(low)) + math.log(low)
+            )
+            for _ in range(n)
+        ]

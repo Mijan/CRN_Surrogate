@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig, TrainingMode
-from crn_surrogate.data.generation.mass_action_generator import MassActionGeneratorConfig
+from crn_surrogate.data.generation.mass_action_generator import (
+    MassActionGeneratorConfig,
+    RandomTopologyConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -28,10 +31,12 @@ class DatasetConfig:
 
     generator: MassActionGeneratorConfig = field(
         default_factory=lambda: MassActionGeneratorConfig(
-            n_species_range=(1, 3),
-            n_reactions_range=(2, 6),
-            max_reactant_order=2,
-            max_product_count=2,
+            topology=RandomTopologyConfig(
+                n_species_range=(1, 3),
+                n_reactions_range=(2, 6),
+                max_reactant_order=2,
+                max_product_count=2,
+            ),
             rate_constant_range=(0.01, 10.0),
         )
     )
