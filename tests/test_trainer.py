@@ -185,7 +185,7 @@ def test_trainer_checkpoint_contains_expected_keys(tmp_path):
     trainer.train(_make_dataset(crn), val_dataset=_make_dataset(crn, n_items=2))
     pt_file = next(f for f in os.listdir(ckpt_dir) if f.endswith(".pt"))
     ckpt = torch.load(os.path.join(ckpt_dir, pt_file), weights_only=False)
-    assert {"epoch", "encoder_state", "sde_state", "val_loss"} == set(ckpt.keys())
+    assert {"epoch", "encoder_state", "sde_state", "val_loss", "optimizer_state", "scheduler_state", "best_val_loss"}.issubset(set(ckpt.keys()))
 
 
 # ── Profiler CSV integration ──────────────────────────────────────────────────
