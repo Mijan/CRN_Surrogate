@@ -58,7 +58,7 @@ def _resolve_checkpoint(
 
         if resume_arg == "auto":
             artifact_ref = (
-                f"{cfg.wandb_project}/{cfg.experiment_name}_train_checkpoint:latest"
+                f"{cfg.wandb_project}/{cfg.experiment_name}_train_model_checkpoint:latest"
             )
         else:
             artifact_ref = resume_arg

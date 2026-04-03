@@ -20,7 +20,6 @@ from crn_surrogate.simulation.trajectory import Trajectory
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer
 
-
 # ── Shared setup ──────────────────────────────────────────────────────────────
 
 
@@ -36,7 +35,9 @@ def _small_model():
     return encoder, sde, model_config, crn
 
 
-def _make_dataset(crn, n_items: int = 4, M: int = 4, T: int = 8) -> CRNTrajectoryDataset:
+def _make_dataset(
+    crn, n_items: int = 4, M: int = 4, T: int = 8
+) -> CRNTrajectoryDataset:
     """Build a tiny dataset with n_items CRN instances."""
     ssa = GillespieSSA()
     time_grid = torch.linspace(0.0, 5.0, T)
@@ -151,10 +152,7 @@ def test_load_checkpoint_restores_optimizer(tmp_path):
     # Verify optimizer state matches
     restored = trainer2._optimizer.state_dict()
     # Compare param_groups lr
-    assert (
-        restored["param_groups"][0]["lr"]
-        == saved_opt_state["param_groups"][0]["lr"]
-    )
+    assert restored["param_groups"][0]["lr"] == saved_opt_state["param_groups"][0]["lr"]
 
 
 def test_resume_continues_from_correct_epoch(tmp_path):
@@ -193,7 +191,9 @@ def test_resume_continues_from_correct_epoch(tmp_path):
     trainer2 = Trainer(encoder2, sde2, model_config, config2)
     start_epoch = trainer2.load_checkpoint(ckpt)
 
-    result = trainer2.train(dataset, val_dataset=_make_dataset(crn, n_items=2), start_epoch=start_epoch)
+    result = trainer2.train(
+        dataset, val_dataset=_make_dataset(crn, n_items=2), start_epoch=start_epoch
+    )
 
     # Resumed from epoch N, so trained epochs N+1 through max_epochs=4
     # ckpt was at epoch <= 2; resumed from epoch ckpt["epoch"] + 1

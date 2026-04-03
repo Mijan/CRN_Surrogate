@@ -526,7 +526,7 @@ class Trainer:
                 import wandb
 
                 artifact = wandb.Artifact(
-                    name=f"{self._train_config.wandb_run_name}_checkpoint",
+                    name=f"{self._train_config.wandb_run_name}_model_checkpoint",
                     type="model-checkpoint",
                     metadata={"epoch": epoch, "val_loss": val_loss},
                 )
