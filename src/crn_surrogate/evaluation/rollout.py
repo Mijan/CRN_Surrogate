@@ -61,7 +61,7 @@ class ModelEvaluator:
         self._encoder.eval()
         self._sde.eval()
         with torch.no_grad():
-            ctx = self._encoder(crn_repr, initial_state)
+            ctx = self._encoder(crn_repr)
             trajectories = [
                 self._solver.solve(
                     self._sde, initial_state.clone(), ctx, times, dt

@@ -351,7 +351,7 @@ def _make_nll_sde_and_ctx(n_species: int = 2, d_protocol: int = 0):
     crn = lotka_volterra()
     enc = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=1))
     crn_repr = crn_to_tensor_repr(crn)
-    ctx = enc(crn_repr, torch.zeros(n_species))
+    ctx = enc(crn_repr)
     sde = CRNNeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
         n_species=n_species,

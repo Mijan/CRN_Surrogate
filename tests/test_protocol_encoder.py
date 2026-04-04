@@ -147,10 +147,9 @@ def test_species_embedding_with_is_external_preserves_shape() -> None:
 
     cfg = EncoderConfig(d_model=16, max_species=8)
     embed = SpeciesEmbedding(cfg)
-    state = torch.tensor([1.0, 2.0, 3.0])
 
-    out_none = embed(state, is_external=None)
-    out_flag = embed(state, is_external=torch.zeros(3, dtype=torch.bool))
+    out_none = embed(n_species=3, is_external=None)
+    out_flag = embed(n_species=3, is_external=torch.zeros(3, dtype=torch.bool))
 
     assert out_none.shape == (3, 16)
     assert out_flag.shape == (3, 16)
@@ -163,11 +162,10 @@ def test_species_embedding_external_flag_changes_values() -> None:
 
     cfg = EncoderConfig(d_model=16, max_species=8)
     embed = SpeciesEmbedding(cfg)
-    state = torch.tensor([5.0, 10.0])
 
     is_external = torch.tensor([False, True])
-    out_with = embed(state, is_external=is_external)
-    out_without = embed(state, is_external=None)
+    out_with = embed(n_species=2, is_external=is_external)
+    out_without = embed(n_species=2, is_external=None)
 
     # The external-species row should differ.
     assert not torch.allclose(out_with[1], out_without[1])

@@ -61,23 +61,27 @@ class BipartiteGNNEncoder(nn.Module):
         )
         self._context_dropout = nn.Dropout(config.context_dropout)
 
-    def forward(
-        self,
-        crn_repr: CRNTensorRepr,
-        initial_state: torch.Tensor,
-    ) -> CRNContext:
+    def forward(self, crn_repr: CRNTensorRepr) -> CRNContext:
         """Encode a CRN tensor representation and return contextualized embeddings.
+
+        The encoding depends only on the CRN's topology and kinetics, not on
+        any particular initial state. This ensures the same CRN always produces
+        the same context vector regardless of experimental conditions.
 
         Args:
             crn_repr: Flat tensor representation of the CRN.
-            initial_state: (n_species,) initial molecular counts.
 
         Returns:
-            CRNContext with species embeddings, reaction embeddings, and context vector.
+            CRNContext with species embeddings, reaction embeddings, and
+            context vector.
         """
         edges: BipartiteEdges = crn_repr.bipartite_edges
 
-        h_species = self._species_embed(initial_state, is_external=crn_repr.is_external)
+        h_species = self._species_embed(
+            n_species=crn_repr.n_species,
+            is_external=crn_repr.is_external,
+            device=crn_repr.stoichiometry.device,
+        )
         h_reactions = self._reaction_embed(
             crn_repr.propensity_type_ids,
             crn_repr.propensity_params,

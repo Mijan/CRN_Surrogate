@@ -274,8 +274,8 @@ class Trainer:
         true_trajs = true_trajs / scale
         init_state = init_state / scale
 
-        # ── Encode (normalized initial state) ────────────────────────────────
-        ctx = self._encoder(crn_repr, init_state)
+        # ── Encode CRN structure ─────────────────────────────────────────────
+        ctx = self._encoder(crn_repr)
 
         # Species mask for the SDE's full dimensionality
         species_mask = torch.zeros(
@@ -402,7 +402,7 @@ class Trainer:
                 scale = self._normalizer.compute_scale(true_trajs)
             true_trajs = true_trajs / scale
             init_state = init_state / scale
-            ctx = self._encoder(crn_repr, init_state)
+            ctx = self._encoder(crn_repr)
             species_mask = torch.zeros(
                 n_species_sde, dtype=torch.bool, device=init_state.device
             )
@@ -445,7 +445,7 @@ class Trainer:
                 scale = self._normalizer.compute_scale(true_trajs)
             true_trajs = true_trajs / scale
             init_state = init_state / scale
-            ctx = self._encoder(crn_repr, init_state)
+            ctx = self._encoder(crn_repr)
             species_mask = torch.zeros(
                 n_species_sde, dtype=torch.bool, device=init_state.device
             )
