@@ -150,16 +150,26 @@ class Trainer:
             val_loss: float | None = None
             val_nll: float | None = None
             if val_dataset is not None and epoch % self._train_config.val_every == 0:
-                val_loss, val_nll = self._validate(val_dataset)
+                do_rollout = self._effective_mode(epoch) != TrainingMode.TEACHER_FORCING
+                val_loss, val_nll = self._validate(
+                    val_dataset, compute_rollout=do_rollout
+                )
                 result.val_losses.append(val_loss)
                 result.val_nll_losses.append(val_nll)
                 result.val_epochs.append(epoch)
                 self._maybe_checkpoint(val_nll, epoch)
-                print(
-                    f"Epoch {epoch:4d} | train={train_loss:.4f} | "
-                    f"val={val_loss:.4f} | val_nll={val_nll:.4f} | "
-                    f"grad={mean_grad_norm:.3f}"
-                )
+                if do_rollout:
+                    print(
+                        f"Epoch {epoch:4d} | train={train_loss:.4f} | "
+                        f"val={val_loss:.4f} | val_nll={val_nll:.4f} | "
+                        f"grad={mean_grad_norm:.3f}"
+                    )
+                else:
+                    print(
+                        f"Epoch {epoch:4d} | train={train_loss:.4f} | "
+                        f"val_nll={val_nll:.4f} | "
+                        f"grad={mean_grad_norm:.3f}"
+                    )
             else:
                 print(
                     f"Epoch {epoch:4d} | train={train_loss:.4f} | grad={mean_grad_norm:.3f}"
@@ -173,10 +183,10 @@ class Trainer:
                     "grad_norm": mean_grad_norm,
                     "lr": self._optimizer.param_groups[0]["lr"],
                 }
-                if val_loss is not None:
-                    metrics["val_loss"] = val_loss
                 if val_nll is not None:
                     metrics["val_nll"] = val_nll
+                if val_loss is not None and val_loss != 0.0:
+                    metrics["val_loss"] = val_loss
                 self._wandb.log_epoch(metrics)
                 self._wandb.log_phase_timings(self._timer)
 
@@ -337,15 +347,21 @@ class Trainer:
             propensity_params=batch["propensity_params"][idx, :n_reactions],
         )
 
-    def _validate(self, val_dataset: CRNTrajectoryDataset) -> tuple[float, float]:
+    def _validate(
+        self,
+        val_dataset: CRNTrajectoryDataset,
+        compute_rollout: bool = False,
+    ) -> tuple[float, float]:
         """Compute validation losses over the full validation dataset.
 
-        Always uses full rollout for the trajectory loss regardless of
-        training_mode, because the goal of validation is to assess
-        long-horizon trajectory quality.
+        Args:
+            val_dataset: Validation trajectories.
+            compute_rollout: If True, compute the full SDE rollout loss
+                (expensive). If False, only compute teacher-forcing NLL.
 
         Returns:
-            Tuple of (rollout_loss, nll_loss).
+            Tuple of (rollout_loss, nll_loss). rollout_loss is 0.0 when
+            compute_rollout is False.
         """
         self._encoder.eval()
         self._sde.eval()
@@ -362,7 +378,8 @@ class Trainer:
         with torch.no_grad():
             for batch in loader:
                 batch = self._batch_to_device(batch)
-                total_rollout += self._compute_batch_rollout_loss(batch).item()
+                if compute_rollout:
+                    total_rollout += self._compute_batch_rollout_loss(batch).item()
                 total_nll += self._compute_batch_nll(batch).item()
                 n_batches += 1
         denom = max(n_batches, 1)
