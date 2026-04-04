@@ -173,6 +173,8 @@ class Trainer:
                     f"Epoch {epoch:4d} | train={train_loss:.4f} | grad={mean_grad_norm:.3f}"
                 )
 
+            self._periodic_checkpoint(epoch, train_loss)
+
             self._csv_logger.log_epoch(epoch, self._timer)
             if self._wandb is not None:
                 metrics: dict = {
@@ -489,6 +491,56 @@ class Trainer:
         epoch = checkpoint.get("epoch", 0)
         print(f"Resumed from epoch {epoch} (best_val_loss={self._best_val_loss:.4f})")
         return epoch + 1
+
+    def _periodic_checkpoint(self, epoch: int, train_loss: float) -> None:
+        """Save a periodic checkpoint regardless of validation performance.
+
+        These are saved alongside best-validation checkpoints with a distinct
+        filename pattern (periodic_epochN.pt) so they do not interfere. Only the
+        last 3 periodic checkpoints are kept on disk; all versions are preserved
+        in W&B as versioned artifacts.
+        """
+        if self._train_config.checkpoint_every <= 0:
+            return
+        if epoch % self._train_config.checkpoint_every != 0:
+            return
+
+        ckpt_dir = Path(self._train_config.checkpoint_dir)
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        path = ckpt_dir / f"periodic_epoch{epoch}.pt"
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "encoder_state": self._encoder.state_dict(),
+                "sde_state": self._sde.state_dict(),
+                "optimizer_state": self._optimizer.state_dict(),
+                "scheduler_state": self._scheduler.state_dict(),
+                "best_val_loss": self._best_val_loss,
+                "train_loss": train_loss,
+            },
+            path,
+        )
+
+        # Keep only the last 3 periodic checkpoints on disk
+        _max_keep = 3
+        for old_file in sorted(ckpt_dir.glob("periodic_epoch*.pt"))[:-_max_keep]:
+            old_file.unlink()
+
+        if self._wandb is not None:
+            import wandb
+
+            artifact = wandb.Artifact(
+                name=f"{self._train_config.wandb_run_name}_periodic_checkpoint",
+                type="model-checkpoint",
+                metadata={
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "checkpoint_type": "periodic",
+                },
+            )
+            artifact.add_file(str(path))
+            wandb.log_artifact(artifact)
 
     def _maybe_checkpoint(self, val_loss: float, epoch: int) -> None:
         """Save a checkpoint if validation loss improved."""

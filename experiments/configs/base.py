@@ -72,6 +72,9 @@ class BaseExperimentConfig:
     grad_clip_norm: float = 1.0
     scheduler_type: str = "cosine"
     val_every: int = 10
+    checkpoint_every: int = (
+        0  # Save a periodic checkpoint every N epochs (0 to disable)
+    )
 
     # ── Builders ─────────────────────────────────────────────────────────
 
@@ -127,6 +130,7 @@ class BaseExperimentConfig:
             grad_clip_norm=self.grad_clip_norm,
             scheduler_type=sched,
             training_mode=TrainingMode.TEACHER_FORCING,
+            checkpoint_every=self.checkpoint_every,
             use_wandb=use_wandb,
             wandb_project=self.wandb_project,
             wandb_run_name=f"{self.experiment_name}_train",

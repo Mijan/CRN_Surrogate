@@ -38,6 +38,9 @@ class TrainingConfig:
     training_mode: TrainingMode = TrainingMode.TEACHER_FORCING
     scheduled_sampling_start_epoch: int = 50
     scheduled_sampling_end_epoch: int = 150
+    checkpoint_every: int = (
+        0  # Save a periodic checkpoint every N epochs (0 to disable)
+    )
     # Weights & Biases integration (requires `pip install wandb`)
     use_wandb: bool = False
     wandb_project: str = "crn-surrogate"

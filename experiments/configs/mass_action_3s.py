@@ -97,6 +97,7 @@ class MassAction3sV4Config(BaseExperimentConfig):
     dt: float = 0.1
     val_every: int = 5
     n_ssa_samples: int = 16  # matches n_ssa_trajectories / n_init_conditions
+    checkpoint_every: int = 10  # save every 10 epochs; keep last 3 on disk
 
     # Dataset (same as v3)
     dataset: DatasetConfig = field(
