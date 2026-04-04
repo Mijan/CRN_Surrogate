@@ -41,17 +41,17 @@ class ModelEvaluator:
         dt: float,
         n_rollouts: int = 50,
     ) -> torch.Tensor:
-        """Generate K independent SDE rollouts.
+        """Generate K independent SDE rollouts in raw count space.
 
         Args:
             crn_repr: Tensor representation of the CRN.
-            initial_state: (n_species,) initial state.
+            initial_state: (n_species,) initial state in raw counts.
             times: (T,) evaluation time grid.
             dt: Solver step size.
             n_rollouts: Number of independent rollouts K.
 
         Returns:
-            (K, T, n_species) stacked trajectories.
+            (K, T, n_species) stacked trajectories in raw count space.
         """
         device = next(self._encoder.parameters()).device
         crn_repr = crn_repr.to(device)
