@@ -139,11 +139,6 @@ def main() -> None:
             "(3) 'auto' to automatically find the latest W&B checkpoint for this experiment"
         ),
     )
-    parser.add_argument(
-        "--compile",
-        action="store_true",
-        help="Use torch.compile on encoder and SDE (requires PyTorch 2.0+, faster on GPU)",
-    )
     args = parser.parse_args()
 
     cfg = get_config(args.config)
@@ -205,16 +200,6 @@ def main() -> None:
     model_config = cfg.build_model_config()
     encoder = BipartiteGNNEncoder(model_config.encoder).to(device)
     sde = CRNNeuralSDE(model_config.sde, n_species=cfg.max_n_species).to(device)
-
-    # ── Optional torch.compile ───────────────────────────────────────────────
-    if args.compile:
-        if not hasattr(torch, "compile"):
-            print("WARNING: torch.compile not available (requires PyTorch 2.0+). Skipping.")
-        else:
-            print("Applying torch.compile to encoder and SDE...")
-            encoder = torch.compile(encoder)
-            sde = torch.compile(sde)
-            print("torch.compile applied. First epoch will be slower (compilation).")
 
     train_config = cfg.build_training_config(use_wandb=use_wandb)
     if args.max_epochs is not None:

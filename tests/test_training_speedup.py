@@ -3,11 +3,9 @@
 Covers:
 - _validate with compute_rollout=False returns 0.0 rollout loss and finite NLL.
 - _validate with compute_rollout=True returns nonzero rollout loss and finite NLL.
-- torch.compile produces identical encoder outputs to the uncompiled model.
 """
 
 import numpy as np
-import pytest
 import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
@@ -109,38 +107,3 @@ def test_validate_with_rollout_returns_nonzero_rollout_loss(tmp_path):
     assert val_loss != 0.0
     assert np.isfinite(val_loss)
     assert np.isfinite(val_nll)
-
-
-# ── torch.compile tests ───────────────────────────────────────────────────────
-
-
-@pytest.mark.skipif(
-    not hasattr(torch, "compile"),
-    reason="torch.compile requires PyTorch 2.0+",
-)
-def test_compiled_encoder_same_output():
-    """torch.compile produces identical encoder outputs to the uncompiled model."""
-    crn = birth_death(k_birth=2.0, k_death=0.5)
-    model_config = ModelConfig(
-        encoder=EncoderConfig(d_model=8, n_layers=1),
-        sde=SDEConfig.from_crn(crn, d_model=8, d_hidden=16),
-    )
-    encoder = BipartiteGNNEncoder(model_config.encoder)
-    encoder.eval()
-
-    crn_repr = crn_to_tensor_repr(crn)
-    init_state = torch.tensor([5.0])
-
-    with torch.no_grad():
-        ctx_raw = encoder(crn_repr, init_state)
-
-    encoder_c = torch.compile(encoder)
-    with torch.no_grad():
-        ctx_compiled = encoder_c(crn_repr, init_state)
-
-    torch.testing.assert_close(
-        ctx_raw.context_vector,
-        ctx_compiled.context_vector,
-        atol=1e-5,
-        rtol=1e-5,
-    )
