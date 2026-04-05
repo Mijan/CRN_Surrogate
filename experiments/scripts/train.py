@@ -59,7 +59,7 @@ def _resolve_checkpoint(
         if resume_arg == "auto":
             # Prefer best-validation checkpoint; fall back to periodic checkpoint
             candidates = [
-                f"{cfg.wandb_project}/{cfg.experiment_name}_train_model_checkpoint:latest",
+                # f"{cfg.wandb_project}/{cfg.experiment_name}_train_model_checkpoint:latest",
                 f"{cfg.wandb_project}/{cfg.experiment_name}_train_periodic_checkpoint:latest",
             ]
             ckpt_path = None

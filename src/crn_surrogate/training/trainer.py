@@ -522,9 +522,13 @@ class Trainer:
             path,
         )
 
-        # Keep only the last 3 periodic checkpoints on disk
+        # Keep only the last 3 periodic checkpoints on disk (sort numerically by epoch)
         _max_keep = 3
-        for old_file in sorted(ckpt_dir.glob("periodic_epoch*.pt"))[:-_max_keep]:
+        _by_epoch = sorted(
+            ckpt_dir.glob("periodic_epoch*.pt"),
+            key=lambda p: int(p.stem.removeprefix("periodic_epoch")),
+        )
+        for old_file in _by_epoch[:-_max_keep]:
             old_file.unlink()
 
         if self._wandb is not None:
