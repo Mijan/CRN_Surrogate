@@ -129,9 +129,9 @@ class BipartiteGNNEncoder(nn.Module):
         )
 
         # Concatenated species embeddings: local indices per CRN (not globally offset)
-        species_indices = torch.cat([
-            torch.arange(ns, device=device) for ns in n_species_list
-        ])
+        species_indices = torch.cat(
+            [torch.arange(ns, device=device) for ns in n_species_list]
+        )
         is_external = torch.cat([r.is_external for r in crn_reprs])
         h_species = self._species_embed.embed_from_indices(species_indices, is_external)
 
@@ -146,7 +146,11 @@ class BipartiteGNNEncoder(nn.Module):
 
         # Segment-mean pooling per CRN, then dropout
         context_vectors = self._pool_context_batched(
-            h_species, h_reactions, n_species_list, n_reactions_list, device,
+            h_species,
+            h_reactions,
+            n_species_list,
+            n_reactions_list,
+            device,
         )
         context_vectors = self._context_dropout(context_vectors)  # (B, 2*d_model)
 
@@ -186,14 +190,18 @@ class BipartiteGNNEncoder(nn.Module):
         B = len(n_species_list)
         d = self._config.d_model
 
-        species_batch = torch.cat([
-            torch.full((ns,), i, dtype=torch.long, device=device)
-            for i, ns in enumerate(n_species_list)
-        ])
-        reaction_batch = torch.cat([
-            torch.full((nr,), i, dtype=torch.long, device=device)
-            for i, nr in enumerate(n_reactions_list)
-        ])
+        species_batch = torch.cat(
+            [
+                torch.full((ns,), i, dtype=torch.long, device=device)
+                for i, ns in enumerate(n_species_list)
+            ]
+        )
+        reaction_batch = torch.cat(
+            [
+                torch.full((nr,), i, dtype=torch.long, device=device)
+                for i, nr in enumerate(n_reactions_list)
+            ]
+        )
 
         pooled_species = torch.zeros(B, d, device=device)
         pooled_species.index_add_(0, species_batch, h_species)
