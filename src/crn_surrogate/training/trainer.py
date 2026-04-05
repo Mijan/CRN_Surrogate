@@ -329,13 +329,41 @@ class Trainer:
             init_state_padded=batch["initial_states"][idx],  # (n_species_sde,)
         )
 
+    def _prepare_batch(self, batch: dict) -> list[PreparedItem]:
+        """Prepare all items in a batch using a single batched encoder pass.
+
+        Transfers all CRNTensorReprs to the training device, runs the
+        encoder once on the combined disconnected graph, and assembles
+        PreparedItems from the pre-padded batch tensors.
+
+        Args:
+            batch: Collated batch dict from CRNCollator(n_species_sde=...).
+
+        Returns:
+            List of B PreparedItems.
+        """
+        B = batch["stoichiometry"].shape[0]
+        crn_reprs = [batch["crn_reprs"][idx].to(self._device) for idx in range(B)]
+        contexts = self._encoder.forward_batch(crn_reprs)
+
+        return [
+            PreparedItem(
+                context=contexts[idx],
+                true_trajs_padded=batch["trajectories"][idx],
+                species_mask=batch["species_mask"][idx],
+                times=batch["times"][idx],
+                init_state_padded=batch["initial_states"][idx],
+            )
+            for idx in range(B)
+        ]
+
     def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
         """Compute mean loss over all items in the batch."""
         B = batch["stoichiometry"].shape[0]
         mode = self._effective_mode(epoch)
 
-        # Prepare all items (encoder runs sequentially — each CRN has a distinct graph)
-        items = [self._prepare_item(batch, idx) for idx in range(B)]
+        # Single batched encoder pass instead of B sequential ones
+        items = self._prepare_batch(batch)
 
         if mode == TrainingMode.TEACHER_FORCING:
             return self._compute_batch_nll_batched(items)
@@ -487,8 +515,8 @@ class Trainer:
                 batch = self._batch_to_device(batch)
                 B = batch["stoichiometry"].shape[0]
 
-                # Prepare all items once — shared by NLL and rollout
-                items = [self._prepare_item(batch, idx) for idx in range(B)]
+                # Single batched encoder pass — shared by NLL and rollout
+                items = self._prepare_batch(batch)
 
                 total_nll += self._compute_batch_nll_batched(items).item()
 
