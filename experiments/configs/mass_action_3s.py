@@ -92,7 +92,7 @@ class MassAction3sV4Config(BaseExperimentConfig):
 
     # Training (same as v3 witch changed batch size)
     max_epochs: int = 200
-    batch_size: int = 128
+    batch_size: int = 512
     lr: float = 1e-3
     dt: float = 0.1
     val_every: int = 5
