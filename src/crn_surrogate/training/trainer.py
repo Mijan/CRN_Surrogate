@@ -118,7 +118,9 @@ class Trainer:
 
         self._checkpoint_mgr = CheckpointManager(
             checkpoint_dir=train_config.checkpoint_dir,
-            wandb_run_name=train_config.wandb_run_name if train_config.use_wandb else None,
+            wandb_run_name=train_config.wandb_run_name
+            if train_config.use_wandb
+            else None,
             checkpoint_every=train_config.checkpoint_every,
         )
 
@@ -232,8 +234,11 @@ class Trainer:
             The epoch to resume from (checkpoint["epoch"] + 1).
         """
         return self._checkpoint_mgr.load(
-            checkpoint, self._encoder, self._sde,
-            self._optimizer, self._scheduler,
+            checkpoint,
+            self._encoder,
+            self._sde,
+            self._optimizer,
+            self._scheduler,
         )
 
     def _build_state(self, epoch: int, **extra) -> dict:
@@ -318,7 +323,9 @@ class Trainer:
 
         crn_repr = CRNTensorRepr(
             stoichiometry=batch["stoichiometry"][idx, :n_reactions, :n_species_actual],
-            dependency_matrix=batch["dependency_matrix"][idx, :n_reactions, :n_species_actual],
+            dependency_matrix=batch["dependency_matrix"][
+                idx, :n_reactions, :n_species_actual
+            ],
             propensity_type_ids=batch["propensity_type_ids"][idx, :n_reactions],
             propensity_params=batch["propensity_params"][idx, :n_reactions],
         )
@@ -349,42 +356,105 @@ class Trainer:
     def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
         """Compute mean loss over all items in the batch."""
         B = batch["stoichiometry"].shape[0]
-        total = torch.zeros(1, device=batch["stoichiometry"].device)
-        for idx in range(B):
-            total = total + self._compute_item_loss(batch, idx, epoch)
-        return total / B
-
-    def _compute_item_loss(self, batch: dict, idx: int, epoch: int = 1) -> torch.Tensor:
-        """Compute loss for a single item in the batch, dispatching on training mode.
-
-        The SDE operates in raw count space; the GaussianTransitionNLL self-normalizes
-        via residual² / σ² = O(1) regardless of species count scale.
-        """
-        item = self._prepare_item(batch, idx)
         mode = self._effective_mode(epoch)
 
+        # Prepare all items (encoder runs sequentially — each CRN has a distinct graph)
+        items = [self._prepare_item(batch, idx) for idx in range(B)]
+
         if mode == TrainingMode.TEACHER_FORCING:
-            return self._nll_loss.compute(
-                sde=self._sde,
-                crn_context=item.context,
-                true_trajectory=item.true_trajs_padded,
-                times=item.times,
-                dt=self._train_config.dt,
+            return self._compute_batch_nll_batched(items)
+
+        # Rollout modes stay sequential (each item needs K independent SDE solves)
+        total = torch.zeros(1, device=batch["stoichiometry"].device)
+        for item in items:
+            k = self._train_config.n_sde_samples
+            pred_samples = [
+                self._solver.solve(
+                    self._sde,
+                    item.init_state_padded.clone(),
+                    item.context,
+                    item.times,
+                    self._train_config.dt,
+                ).states
+                for _ in range(k)
+            ]
+            pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species_sde)
+            total = total + self._rollout_loss.compute(
+                pred_states,
+                item.true_trajs_padded,
                 mask=item.species_mask,
             )
+        return total / B
 
-        k = self._train_config.n_sde_samples
-        pred_samples = [
-            self._solver.solve(
-                self._sde, item.init_state_padded.clone(), item.context,
-                item.times, self._train_config.dt,
-            ).states
-            for _ in range(k)
-        ]
-        pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species_sde)
-        return self._rollout_loss.compute(
-            pred_states, item.true_trajs_padded, mask=item.species_mask,
+    def _compute_batch_nll_batched(
+        self,
+        items: list[PreparedItem],
+    ) -> torch.Tensor:
+        """Compute mean NLL over all items using a single batched forward pass.
+
+        Collects all M*(T-1) transitions from all B items into one large tensor,
+        runs one batched drift and diffusion forward pass, computes per-transition
+        NLL, then normalizes per-item (each item contributes equally regardless
+        of its number of active species).
+
+        Args:
+            items: List of B PreparedItems from _prepare_item().
+
+        Returns:
+            Scalar mean NLL loss (same value as the sequential per-item loop
+            would produce, up to floating point ordering).
+        """
+        B = len(items)
+        dt = self._train_config.dt
+
+        M, T, S = items[0].true_trajs_padded.shape
+        n_trans = M * (T - 1)  # transitions per item
+
+        # Stack trajectories: (B, M, T, S)
+        all_trajs = torch.stack([item.true_trajs_padded for item in items])
+
+        # Extract transitions: (B * n_trans, S)
+        y_t = all_trajs[:, :, :-1, :].reshape(B * n_trans, S)
+        y_next = all_trajs[:, :, 1:, :].reshape(B * n_trans, S)
+
+        # Expand context vectors: (B, d_context) -> (B * n_trans, d_context)
+        ctx_vectors = torch.stack([item.context.context_vector for item in items])
+        ctx_expanded = (
+            ctx_vectors.unsqueeze(1).expand(B, n_trans, -1).reshape(B * n_trans, -1)
         )
+
+        # Time tensor: all items share the same time grid
+        t_single = items[0].times[:-1].repeat(M)  # (n_trans,)
+        t_all = t_single.repeat(B)  # (B * n_trans,)
+
+        # TODO: When protocol-conditioned training is added, expand protocol
+        # embeddings per-item the same way as context vectors and pass to
+        # drift_from_context / diffusion_from_context.
+
+        # ONE batched forward pass (replaces B sequential passes)
+        all_drift = self._sde.drift_from_context(t_all, y_t, ctx_expanded, None)
+        all_G = self._sde.diffusion_from_context(t_all, y_t, ctx_expanded, None)
+
+        # Per-transition Gaussian NLL: ½ (residual²/σ² + log σ²)
+        mu = y_t + all_drift * dt  # (B * n_trans, S)
+        variance = (all_G**2).sum(dim=-1) * dt  # (B * n_trans, S)
+        variance = variance.clamp(min=self._nll_loss._min_variance)
+        residual = y_next - mu
+        nll = 0.5 * (residual**2 / variance + variance.log())  # (B * n_trans, S)
+
+        # Apply species masks and normalize per item
+        masks = torch.stack([item.species_mask for item in items])  # (B, S)
+        masks_expanded = masks.unsqueeze(1).expand(B, n_trans, S)  # (B, n_trans, S)
+
+        nll_reshaped = nll.reshape(B, n_trans, S)
+        nll_masked = nll_reshaped * masks_expanded.float()
+
+        # Per-item mean: sum over transitions and species, divide by (n_trans * n_active)
+        nll_per_item = nll_masked.sum(dim=(1, 2))  # (B,)
+        n_dims_per_item = masks.float().sum(dim=1)  # (B,)
+        nll_per_item = nll_per_item / (n_trans * n_dims_per_item)  # (B,)
+
+        return nll_per_item.mean()
 
     def _effective_mode(self, epoch: int) -> TrainingMode:
         """Determine effective training mode for this epoch."""
@@ -441,35 +511,33 @@ class Trainer:
                 batch = self._batch_to_device(batch)
                 B = batch["stoichiometry"].shape[0]
 
-                nll_total = torch.zeros(1, device=batch["stoichiometry"].device)
-                rollout_total = torch.zeros(1, device=batch["stoichiometry"].device)
+                # Prepare all items once — shared by NLL and rollout
+                items = [self._prepare_item(batch, idx) for idx in range(B)]
 
-                for idx in range(B):
-                    item = self._prepare_item(batch, idx)
-                    nll_total = nll_total + self._nll_loss.compute(
-                        sde=self._sde,
-                        crn_context=item.context,
-                        true_trajectory=item.true_trajs_padded,
-                        times=item.times,
-                        dt=self._train_config.dt,
-                        mask=item.species_mask,
-                    )
-                    if compute_rollout:
+                total_nll += self._compute_batch_nll_batched(items).item()
+
+                if compute_rollout:
+                    rollout_total = torch.zeros(1, device=batch["stoichiometry"].device)
+                    for item in items:
                         k = self._train_config.n_sde_samples
                         pred_samples = [
                             self._solver.solve(
-                                self._sde, item.init_state_padded.clone(),
-                                item.context, item.times, self._train_config.dt,
+                                self._sde,
+                                item.init_state_padded.clone(),
+                                item.context,
+                                item.times,
+                                self._train_config.dt,
                             ).states
                             for _ in range(k)
                         ]
                         pred_states = torch.stack(pred_samples, dim=0)
                         rollout_total = rollout_total + self._rollout_loss.compute(
-                            pred_states, item.true_trajs_padded, mask=item.species_mask,
+                            pred_states,
+                            item.true_trajs_padded,
+                            mask=item.species_mask,
                         )
+                    total_rollout += (rollout_total / B).item()
 
-                total_nll += (nll_total / B).item()
-                total_rollout += (rollout_total / B).item()
                 n_batches += 1
 
         denom = max(n_batches, 1)
