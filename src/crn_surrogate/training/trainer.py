@@ -17,7 +17,6 @@ from crn_surrogate.configs.training_config import (
 )
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
-from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.checkpointing import CheckpointManager
@@ -159,7 +158,7 @@ class Trainer:
             TrainingResult with per-epoch train and val losses.
         """
         result = TrainingResult()
-        collator = CRNCollator()
+        collator = CRNCollator(n_species_sde=self._sde.n_species)
         train_loader = DataLoader(
             train_dataset,
             batch_size=self._train_config.batch_size,
@@ -305,52 +304,29 @@ class Trainer:
         return total_loss / denom, mean_grad_norm
 
     def _prepare_item(self, batch: dict, idx: int) -> PreparedItem:
-        """Extract, encode, and pad a single item from a collated batch.
+        """Encode a single item from a pre-padded collated batch.
 
-        Reconstructs the CRNTensorRepr, runs the encoder, pads trajectories
-        and initial state to the SDE's n_species, and builds the species mask.
+        The collator pre-pads trajectories, initial states, and species mask
+        to n_species_sde, and pre-builds bipartite edges on CPU. This method
+        only transfers the CRNTensorRepr to the training device and runs the
+        encoder; no tensor allocations or .item() synchronizations occur here.
 
         Args:
-            batch: Collated batch dict from CRNCollator.
+            batch: Collated batch dict from CRNCollator(n_species_sde=...).
             idx: Index of the item within the batch.
 
         Returns:
             PreparedItem with all tensors at SDE dimensionality.
         """
-        n_species_actual = int(batch["species_mask"][idx].sum().item())
-        n_reactions = int(batch["reaction_mask"][idx].sum().item())
-        n_species_sde = self._sde.n_species
-
-        crn_repr = CRNTensorRepr(
-            stoichiometry=batch["stoichiometry"][idx, :n_reactions, :n_species_actual],
-            dependency_matrix=batch["dependency_matrix"][
-                idx, :n_reactions, :n_species_actual
-            ],
-            propensity_type_ids=batch["propensity_type_ids"][idx, :n_reactions],
-            propensity_params=batch["propensity_params"][idx, :n_reactions],
-        )
+        crn_repr = batch["crn_reprs"][idx].to(self._device)
         ctx = self._encoder(crn_repr)
-
-        true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]  # (M, T, ns)
-        device = true_trajs.device
-
-        species_mask = torch.zeros(n_species_sde, dtype=torch.bool, device=device)
-        species_mask[:n_species_actual] = True
-
-        M, T, _ = true_trajs.shape
-        true_trajs_padded = torch.zeros(M, T, n_species_sde, device=device)
-        true_trajs_padded[:, :, :n_species_actual] = true_trajs
-
-        init_state = batch["initial_states"][idx, :n_species_actual]
-        init_state_padded = torch.zeros(n_species_sde, device=device)
-        init_state_padded[:n_species_actual] = init_state
 
         return PreparedItem(
             context=ctx,
-            true_trajs_padded=true_trajs_padded,
-            species_mask=species_mask,
+            true_trajs_padded=batch["trajectories"][idx],  # (M, T, n_species_sde)
+            species_mask=batch["species_mask"][idx],  # (n_species_sde,) bool
             times=batch["times"][idx],
-            init_state_padded=init_state_padded,
+            init_state_padded=batch["initial_states"][idx],  # (n_species_sde,)
         )
 
     def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
@@ -496,7 +472,7 @@ class Trainer:
         """
         self._encoder.eval()
         self._sde.eval()
-        collator = CRNCollator()
+        collator = CRNCollator(n_species_sde=self._sde.n_species)
         loader = DataLoader(
             val_dataset,
             batch_size=self._train_config.batch_size,

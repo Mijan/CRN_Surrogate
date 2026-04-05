@@ -119,14 +119,14 @@ class CRNTensorRepr:
     def to(self, device: torch.device) -> CRNTensorRepr:
         """Return a copy with all tensors moved to the given device.
 
-        The cached bipartite edges are NOT carried over; they are lazily
-        recomputed on the new device when first accessed.
+        If bipartite edges were pre-built on the source device, they are
+        transferred to the new device (fast cudaMemcpy) rather than rebuilt.
 
         Returns self if already on the target device (avoids unnecessary copies).
         """
         if self.stoichiometry.device == device:
             return self
-        return CRNTensorRepr(
+        new_repr = CRNTensorRepr(
             stoichiometry=self.stoichiometry.to(device),
             dependency_matrix=self.dependency_matrix.to(device),
             propensity_type_ids=self.propensity_type_ids.to(device),
@@ -138,6 +138,15 @@ class CRNTensorRepr:
             reaction_names=self.reaction_names,
             name=self.name,
         )
+        if hasattr(self, "_cached_edges"):
+            gpu_edges = BipartiteEdges(
+                rxn_to_species_index=self._cached_edges.rxn_to_species_index.to(device),
+                rxn_to_species_feat=self._cached_edges.rxn_to_species_feat.to(device),
+                species_to_rxn_index=self._cached_edges.species_to_rxn_index.to(device),
+                species_to_rxn_feat=self._cached_edges.species_to_rxn_feat.to(device),
+            )
+            object.__setattr__(new_repr, "_cached_edges", gpu_edges)
+        return new_repr
 
 
 def crn_to_tensor_repr(crn: "CRN", max_params: int = 8) -> CRNTensorRepr:
