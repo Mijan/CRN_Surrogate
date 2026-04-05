@@ -37,7 +37,7 @@ def _make_mlp(n_hidden_layers: int = 2) -> ConditionedMLP:
 def _make_context(d_model: int = 16):
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=d_model, n_layers=1))
     crn_repr = crn_to_tensor_repr(birth_death())
-    return encoder(crn_repr, torch.zeros(1))
+    return encoder(crn_repr)
 
 
 # ── ConditionedMLP: output shapes ─────────────────────────────────────────────
@@ -187,9 +187,9 @@ def test_sde_drift_gradients_flow_to_encoder_parameters():
     )
 
     crn_repr = crn_to_tensor_repr(birth_death())
-    init = torch.tensor([5.0])
-    ctx = encoder(crn_repr, init)
+    ctx = encoder(crn_repr)
 
+    init = torch.tensor([5.0])
     drift = sde.drift(torch.tensor(0.0), init, ctx)
     drift.sum().backward()
 

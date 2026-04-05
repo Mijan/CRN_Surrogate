@@ -57,29 +57,48 @@ def _resolve_checkpoint(
         import wandb
 
         if resume_arg == "auto":
-            artifact_ref = (
-                f"{cfg.wandb_project}/{cfg.experiment_name}_train_model_checkpoint:latest"
-            )
+            # Prefer best-validation checkpoint; fall back to periodic checkpoint
+            candidates = [
+                # f"{cfg.wandb_project}/{cfg.experiment_name}_train_model_checkpoint:latest",
+                f"{cfg.wandb_project}/{cfg.experiment_name}_train_periodic_checkpoint:latest",
+            ]
+            ckpt_path = None
+            for artifact_ref in candidates:
+                try:
+                    if wandb.run is not None:
+                        artifact = wandb.run.use_artifact(artifact_ref)
+                    else:
+                        api = wandb.Api()
+                        artifact = api.artifact(artifact_ref)
+                    artifact_dir = Path(artifact.download())
+                    ckpt_files = sorted(artifact_dir.glob("*.pt"))
+                    if ckpt_files:
+                        ckpt_path = ckpt_files[-1]
+                        print(f"Auto-resume: {artifact_ref} -> {ckpt_path.name}")
+                        break
+                except Exception:
+                    continue
+            if ckpt_path is None:
+                print("No checkpoint artifact found. Starting fresh.")
+                return None
         else:
             artifact_ref = resume_arg
-
-        try:
-            if wandb.run is not None:
-                artifact = wandb.run.use_artifact(artifact_ref)
-            else:
-                api = wandb.Api()
-                artifact = api.artifact(artifact_ref)
-            artifact_dir = Path(artifact.download())
-            ckpt_files = sorted(artifact_dir.glob("*.pt"))
-            if not ckpt_files:
-                print(f"No .pt files in artifact {artifact_ref}")
+            try:
+                if wandb.run is not None:
+                    artifact = wandb.run.use_artifact(artifact_ref)
+                else:
+                    api = wandb.Api()
+                    artifact = api.artifact(artifact_ref)
+                artifact_dir = Path(artifact.download())
+                ckpt_files = sorted(artifact_dir.glob("*.pt"))
+                if not ckpt_files:
+                    print(f"No .pt files in artifact {artifact_ref}")
+                    return None
+                ckpt_path = ckpt_files[-1]
+                print(f"Resume (artifact): {artifact_ref} -> {ckpt_path.name}")
+            except Exception as exc:  # wandb.errors.CommError or similar
+                print(f"No checkpoint artifact found ({exc}). Starting fresh.")
                 return None
-            ckpt_path = ckpt_files[-1]
-            label = "auto-resume" if resume_arg == "auto" else "artifact"
-            print(f"Resume ({label}): {artifact_ref} -> {ckpt_path.name}")
-        except Exception as exc:  # wandb.errors.CommError or similar
-            print(f"No checkpoint artifact found ({exc}). Starting fresh.")
-            return None
     else:
         ckpt_path = Path(resume_arg)
         if not ckpt_path.exists():

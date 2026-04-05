@@ -24,13 +24,11 @@ def test_encoder_context_dropout_active_in_train_mode():
     config = EncoderConfig(d_model=32, n_layers=2, context_dropout=0.9)
     encoder = BipartiteGNNEncoder(config)
     crn_repr = crn_to_tensor_repr(birth_death())
-    init = torch.tensor([5.0])
-
     encoder.train()
     torch.manual_seed(0)
-    ctx1 = encoder(crn_repr, init).context_vector
+    ctx1 = encoder(crn_repr).context_vector
     torch.manual_seed(1)
-    ctx2 = encoder(crn_repr, init).context_vector
+    ctx2 = encoder(crn_repr).context_vector
 
     # With p=0.9 dropout over a 64-element vector, outputs almost certainly differ.
     assert not torch.equal(ctx1, ctx2)
@@ -41,11 +39,10 @@ def test_encoder_context_dropout_inactive_in_eval_mode():
     config = EncoderConfig(d_model=32, n_layers=2, context_dropout=0.5)
     encoder = BipartiteGNNEncoder(config)
     crn_repr = crn_to_tensor_repr(birth_death())
-    init = torch.tensor([5.0])
 
     encoder.eval()
-    ctx1 = encoder(crn_repr, init).context_vector
-    ctx2 = encoder(crn_repr, init).context_vector
+    ctx1 = encoder(crn_repr).context_vector
+    ctx2 = encoder(crn_repr).context_vector
 
     assert torch.equal(ctx1, ctx2)
 
@@ -55,11 +52,10 @@ def test_encoder_zero_context_dropout_is_deterministic():
     config = EncoderConfig(d_model=32, n_layers=2, context_dropout=0.0)
     encoder = BipartiteGNNEncoder(config)
     crn_repr = crn_to_tensor_repr(birth_death())
-    init = torch.tensor([5.0])
 
     encoder.train()
-    ctx1 = encoder(crn_repr, init).context_vector
-    ctx2 = encoder(crn_repr, init).context_vector
+    ctx1 = encoder(crn_repr).context_vector
+    ctx2 = encoder(crn_repr).context_vector
 
     assert torch.equal(ctx1, ctx2)
 
@@ -119,7 +115,7 @@ def test_sde_drift_dropout_active_in_train_mode(sde_with_dropout):
     crn_repr = crn_to_tensor_repr(birth_death())
     config = EncoderConfig(d_model=16, n_layers=1)
     encoder = BipartiteGNNEncoder(config)
-    crn_context = encoder(crn_repr, torch.tensor([5.0]))
+    crn_context = encoder(crn_repr)
 
     # Pad context_vector to match d_model=16 → 2*16=32
     # birth_death has 1 species; pad state to 2 for this SDE
@@ -139,7 +135,7 @@ def test_sde_drift_dropout_inactive_in_eval_mode(sde_with_dropout):
     crn_repr = crn_to_tensor_repr(birth_death())
     config = EncoderConfig(d_model=16, n_layers=1)
     encoder = BipartiteGNNEncoder(config)
-    crn_context = encoder(crn_repr, torch.tensor([5.0]))
+    crn_context = encoder(crn_repr)
 
     state = torch.tensor([5.0, 0.0])
 

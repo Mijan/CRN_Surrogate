@@ -351,7 +351,7 @@ def _make_nll_sde_and_ctx(n_species: int = 2, d_protocol: int = 0):
     crn = lotka_volterra()
     enc = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=1))
     crn_repr = crn_to_tensor_repr(crn)
-    ctx = enc(crn_repr, torch.zeros(n_species))
+    ctx = enc(crn_repr)
     sde = CRNNeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
         n_species=n_species,
@@ -419,3 +419,33 @@ def test_gaussian_nll_internal_mask_reduces_loss_when_species_is_wrong():
     assert loss_masked.item() < loss_all.item(), (
         "Masking the bad species should reduce the loss"
     )
+
+
+# ── NLL scale invariance ─────────────────────────────────────────────────────
+
+
+def test_nll_scale_invariance():
+    """NLL produces finite loss and valid gradients for multi-scale species.
+
+    A species at count 100 and a species at count 1 should both contribute
+    finite, non-zero gradients because the residual^2/sigma^2 structure
+    self-normalizes regardless of count scale.
+    """
+    torch.manual_seed(42)
+    M, T = 8, 20
+    true_trajs = torch.zeros(M, T, 2)
+    true_trajs[:, :, 0] = 100.0 + torch.randn(M, T) * 10.0  # O(100)
+    true_trajs[:, :, 1] = 1.0 + torch.randn(M, T) * 0.3  # O(1)
+
+    sde, ctx = _make_nll_sde_and_ctx(n_species=2, d_protocol=0)
+    times = torch.linspace(0, 10, T)
+    loss_fn = GaussianTransitionNLL(min_variance=1e-2)
+
+    loss = loss_fn.compute(sde, ctx, true_trajs, times, dt=0.5)
+    assert torch.isfinite(loss), "Loss must be finite for multi-scale species"
+
+    loss.backward()
+    for p in sde.parameters():
+        if p.grad is not None:
+            assert torch.isfinite(p.grad).all(), "Gradients must be finite"
+            assert p.grad.abs().max() > 0, "Gradients must be non-zero"

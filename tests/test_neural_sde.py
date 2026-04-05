@@ -25,8 +25,7 @@ from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 def _make_context(crn, d_model: int = 16):
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=d_model, n_layers=1))
     crn_repr = crn_to_tensor_repr(crn)
-    init = torch.zeros(crn.n_species)
-    return encoder(crn_repr, init)
+    return encoder(crn_repr)
 
 
 # ── Drift / diffusion shapes ──────────────────────────────────────────────────
@@ -241,7 +240,7 @@ def test_solver_with_input_protocol_clamps_external_species():
             "crn_surrogate.configs.model_config", fromlist=["EncoderConfig"]
         ).EncoderConfig(d_model=16, n_layers=1)
     )
-    ctx = encoder(crn_repr, torch.tensor([0.0, 0.0]))
+    ctx = encoder(crn_repr)
 
     t_on, amp = 2.0, 50.0
     sched = single_pulse(t_start=t_on, t_end=10.0, amplitude=amp)

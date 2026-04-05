@@ -27,7 +27,6 @@ from crn_surrogate.training.losses import (
     GaussianTransitionNLL,
     TrajectoryLoss,
 )
-from crn_surrogate.training.normalization import TrajectoryNormalizer
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
 
 
@@ -82,7 +81,6 @@ class Trainer:
         self._model_config = model_config
         self._train_config = train_config
         self._nll_loss = GaussianTransitionNLL(min_variance=1e-2)
-        self._normalizer = TrajectoryNormalizer()
         self._rollout_loss = (
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
@@ -175,6 +173,8 @@ class Trainer:
                     f"Epoch {epoch:4d} | train={train_loss:.4f} | grad={mean_grad_norm:.3f}"
                 )
 
+            self._periodic_checkpoint(epoch, train_loss)
+
             self._csv_logger.log_epoch(epoch, self._timer)
             if self._wandb is not None:
                 metrics: dict = {
@@ -253,10 +253,7 @@ class Trainer:
         States are padded to the SDE's configured n_species so that a single model
         handles CRNs with varying numbers of species. When n_species_actual ==
         n_species_sde the padding is a no-op and behaviour is identical to before.
-
-        Trajectories and initial states are normalized per-item per-species before
-        being passed to the encoder and loss. This keeps inputs O(1) regardless of
-        molecule count scale.
+        The SDE operates in raw count space; the GaussianTransitionNLL self-normalizes.
         """
         crn_repr = self._reconstruct_tensor_repr(batch, idx)
         n_species_actual = crn_repr.n_species
@@ -265,17 +262,9 @@ class Trainer:
         init_state = batch["initial_states"][idx, :n_species_actual]
         true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]  # (M, T, ns)
 
-        # ── Per-item normalization ────────────────────────────────────────────
-        precomputed = batch.get("scales")
-        if precomputed is not None:
-            scale = precomputed[idx, :n_species_actual]
-        else:
-            scale = self._normalizer.compute_scale(true_trajs)
-        true_trajs = true_trajs / scale
-        init_state = init_state / scale
-
-        # ── Encode (normalized initial state) ────────────────────────────────
-        ctx = self._encoder(crn_repr, init_state)
+        # No normalization: SDE operates in raw count space.
+        # The GaussianTransitionNLL self-normalizes via residual^2 / sigma^2.
+        ctx = self._encoder(crn_repr)
 
         # Species mask for the SDE's full dimensionality
         species_mask = torch.zeros(
@@ -283,7 +272,7 @@ class Trainer:
         )
         species_mask[:n_species_actual] = True
 
-        # Pad normalized trajectories to SDE dimensionality
+        # Pad trajectories to SDE dimensionality
         M, T, _ = true_trajs.shape
         true_trajs_padded = torch.zeros(M, T, n_species_sde, device=true_trajs.device)
         true_trajs_padded[:, :, :n_species_actual] = true_trajs
@@ -301,7 +290,6 @@ class Trainer:
                 mask=species_mask,
             )
 
-        # Rollout: pad normalized initial state for the solver
         padded_init = torch.zeros(n_species_sde, device=init_state.device)
         padded_init[:n_species_actual] = init_state
         k = self._train_config.n_sde_samples
@@ -390,19 +378,12 @@ class Trainer:
         B = batch["stoichiometry"].shape[0]
         n_species_sde = self._sde.n_species
         total = torch.zeros(1, device=batch["stoichiometry"].device)
-        precomputed = batch.get("scales")
         for idx in range(B):
             crn_repr = self._reconstruct_tensor_repr(batch, idx)
             n_species_actual = crn_repr.n_species
             init_state = batch["initial_states"][idx, :n_species_actual]
             true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
-            if precomputed is not None:
-                scale = precomputed[idx, :n_species_actual]
-            else:
-                scale = self._normalizer.compute_scale(true_trajs)
-            true_trajs = true_trajs / scale
-            init_state = init_state / scale
-            ctx = self._encoder(crn_repr, init_state)
+            ctx = self._encoder(crn_repr)
             species_mask = torch.zeros(
                 n_species_sde, dtype=torch.bool, device=init_state.device
             )
@@ -433,21 +414,13 @@ class Trainer:
         B = batch["stoichiometry"].shape[0]
         n_species_sde = self._sde.n_species
         total = torch.zeros(1, device=batch["stoichiometry"].device)
-        precomputed = batch.get("scales")
         for idx in range(B):
             crn_repr = self._reconstruct_tensor_repr(batch, idx)
             n_species_actual = crn_repr.n_species
-            init_state = batch["initial_states"][idx, :n_species_actual]
             true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
-            if precomputed is not None:
-                scale = precomputed[idx, :n_species_actual]
-            else:
-                scale = self._normalizer.compute_scale(true_trajs)
-            true_trajs = true_trajs / scale
-            init_state = init_state / scale
-            ctx = self._encoder(crn_repr, init_state)
+            ctx = self._encoder(crn_repr)
             species_mask = torch.zeros(
-                n_species_sde, dtype=torch.bool, device=init_state.device
+                n_species_sde, dtype=torch.bool, device=true_trajs.device
             )
             species_mask[:n_species_actual] = True
             M, T, _ = true_trajs.shape
@@ -518,6 +491,60 @@ class Trainer:
         epoch = checkpoint.get("epoch", 0)
         print(f"Resumed from epoch {epoch} (best_val_loss={self._best_val_loss:.4f})")
         return epoch + 1
+
+    def _periodic_checkpoint(self, epoch: int, train_loss: float) -> None:
+        """Save a periodic checkpoint regardless of validation performance.
+
+        These are saved alongside best-validation checkpoints with a distinct
+        filename pattern (periodic_epochN.pt) so they do not interfere. Only the
+        last 3 periodic checkpoints are kept on disk; all versions are preserved
+        in W&B as versioned artifacts.
+        """
+        if self._train_config.checkpoint_every <= 0:
+            return
+        if epoch % self._train_config.checkpoint_every != 0:
+            return
+
+        ckpt_dir = Path(self._train_config.checkpoint_dir)
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        path = ckpt_dir / f"periodic_epoch{epoch}.pt"
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "encoder_state": self._encoder.state_dict(),
+                "sde_state": self._sde.state_dict(),
+                "optimizer_state": self._optimizer.state_dict(),
+                "scheduler_state": self._scheduler.state_dict(),
+                "best_val_loss": self._best_val_loss,
+                "train_loss": train_loss,
+            },
+            path,
+        )
+
+        # Keep only the last 3 periodic checkpoints on disk (sort numerically by epoch)
+        _max_keep = 3
+        _by_epoch = sorted(
+            ckpt_dir.glob("periodic_epoch*.pt"),
+            key=lambda p: int(p.stem.removeprefix("periodic_epoch")),
+        )
+        for old_file in _by_epoch[:-_max_keep]:
+            old_file.unlink()
+
+        if self._wandb is not None:
+            import wandb
+
+            artifact = wandb.Artifact(
+                name=f"{self._train_config.wandb_run_name}_periodic_checkpoint",
+                type="model-checkpoint",
+                metadata={
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "checkpoint_type": "periodic",
+                },
+            )
+            artifact.add_file(str(path))
+            wandb.log_artifact(artifact)
 
     def _maybe_checkpoint(self, val_loss: float, epoch: int) -> None:
         """Save a checkpoint if validation loss improved."""

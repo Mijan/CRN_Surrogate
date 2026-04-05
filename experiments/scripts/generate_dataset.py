@@ -30,7 +30,6 @@ from crn_surrogate.data.generation.mass_action_generator import MassActionCRNGen
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.training.normalization import TrajectoryNormalizer
 from experiments.configs.registry import available_configs, get_config
 
 
@@ -223,7 +222,6 @@ def _generate_split(
         "n_reactions_dist": {},
     }
     filter_ = ViabilityFilter(CurationConfig())
-    normalizer = TrajectoryNormalizer()
     n_trajs_per_init = max(1, n_ssa_trajectories // n_init_conditions)
     max_attempts = n_items * 5
 
@@ -268,7 +266,6 @@ def _generate_split(
                     initial_state=init_state,
                     trajectories=traj_tensor,
                     times=time_grid,
-                    scale=normalizer.compute_scale(traj_tensor),
                     motif_label="mass_action",
                 )
             )

@@ -37,7 +37,7 @@ def test_end_to_end_birth_death_trajectory_shape_and_metadata():
     crn_repr = crn_to_tensor_repr(crn)
     t_span = torch.linspace(0, 5, 10)
 
-    ctx = encoder(crn_repr, torch.tensor([10.0]))
+    ctx = encoder(crn_repr)
     traj = solver.solve(sde, torch.tensor([10.0]), ctx, t_span, dt=0.1)
 
     assert traj.states.shape == (10, 1)
@@ -58,7 +58,7 @@ def test_end_to_end_lotka_volterra_trajectory_shape():
     crn_repr = crn_to_tensor_repr(crn)
     t_span = torch.linspace(0, 10, 20)
 
-    ctx = encoder(crn_repr, torch.tensor([50.0, 20.0]))
+    ctx = encoder(crn_repr)
     traj = solver.solve(sde, torch.tensor([50.0, 20.0]), ctx, t_span, dt=0.1)
 
     assert traj.states.shape == (20, 2)
@@ -80,7 +80,7 @@ def test_gradient_flows_from_loss_through_sde_to_encoder():
     crn_repr = crn_to_tensor_repr(crn)
     t_span = torch.linspace(0, 2, 5)
 
-    ctx = encoder(crn_repr, torch.tensor([10.0]))
+    ctx = encoder(crn_repr)
     traj = solver.solve(sde, torch.tensor([10.0]), ctx, t_span, dt=0.1)
 
     pred_states = traj.states.unsqueeze(0)  # (K=1, T, n_species)

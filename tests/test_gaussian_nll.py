@@ -58,7 +58,7 @@ def _make_context() -> CRNContext:
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=1))
     crn_repr = crn_to_tensor_repr(birth_death())
     with torch.no_grad():
-        return encoder(crn_repr, torch.zeros(1))
+        return encoder(crn_repr)
 
 
 def _make_trajectory(T: int = 10, n_species: int = 1) -> torch.Tensor:

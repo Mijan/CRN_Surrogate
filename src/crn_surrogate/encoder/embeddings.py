@@ -9,9 +9,9 @@ from crn_surrogate.configs.model_config import EncoderConfig
 class SpeciesEmbedding(nn.Module):
     """Initial feature embedding for species nodes.
 
-    Combines a concentration projection and a learnable species identity
-    embedding (analogous to positional encoding). The two contributions are
-    summed so the output dimension remains d_model.
+    Uses a learnable species identity embedding (analogous to positional
+    encoding) plus an external-species flag projection. The embedding is
+    purely structural and does not depend on the initial state.
     """
 
     def __init__(self, config: EncoderConfig) -> None:
@@ -20,32 +20,31 @@ class SpeciesEmbedding(nn.Module):
         """
         super().__init__()
         self._config = config
-        self._conc_proj = nn.Linear(1, config.d_model)
         self._identity_embed = nn.Embedding(config.max_species, config.d_model)
         self._external_proj = nn.Linear(1, config.d_model)
 
     def forward(
         self,
-        initial_concentration: torch.Tensor,
+        n_species: int,
         is_external: torch.Tensor | None = None,
+        device: torch.device | None = None,
     ) -> torch.Tensor:
-        """Embed species from their initial concentrations and positional identities.
+        """Embed species from their positional identities and external flags.
 
         Args:
-            initial_concentration: (n_species,) initial molecular counts.
-            is_external: (n_species,) boolean tensor; True for externally controlled
-                species. When provided, adds a learned projection of the flag.
+            n_species: Number of species in this CRN.
+            is_external: (n_species,) boolean tensor; True for externally
+                controlled species. Adds a learned projection of the flag.
+            device: Device for the index tensor. If None, uses the device
+                of the embedding weight.
 
         Returns:
             (n_species, d_model) embeddings.
         """
-        n_species = initial_concentration.shape[-1]
-        indices = torch.arange(n_species, device=initial_concentration.device)
-        conc_emb = self._conc_proj(
-            initial_concentration.unsqueeze(-1)
-        )  # (n_species, d_model)
-        id_emb = self._identity_embed(indices)  # (n_species, d_model)
-        h = conc_emb + id_emb
+        if device is None:
+            device = self._identity_embed.weight.device
+        indices = torch.arange(n_species, device=device)
+        h = self._identity_embed(indices)  # (n_species, d_model)
         if is_external is not None:
             ext_emb = self._external_proj(
                 is_external.float().unsqueeze(-1)

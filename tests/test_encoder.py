@@ -3,7 +3,7 @@
 Covers:
 - Output tensor shapes for 1-species and 2-species CRNs.
 - context_vector dimension is always 2 * d_model.
-- Different initial states produce different encodings.
+- Encoder output is independent of initial state (state-independent encoding).
 - Gradients flow through all encoder parameters.
 - Encoder is deterministic in eval mode with dropout=0.
 - EdgeFeature enum / EDGE_FEAT_DIM single source of truth.
@@ -39,7 +39,7 @@ def test_encoder_birth_death_output_shapes():
     d_model = 16
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=d_model, n_layers=2))
     crn_repr = crn_to_tensor_repr(birth_death())
-    ctx = encoder(crn_repr, torch.tensor([5.0]))
+    ctx = encoder(crn_repr)
 
     assert ctx.species_embeddings.shape == (1, d_model)
     assert ctx.reaction_embeddings.shape == (2, d_model)
@@ -51,7 +51,7 @@ def test_encoder_lotka_volterra_output_shapes():
     d_model = 32
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=d_model, n_layers=2))
     crn_repr = crn_to_tensor_repr(lotka_volterra())
-    ctx = encoder(crn_repr, torch.tensor([50.0, 20.0]))
+    ctx = encoder(crn_repr)
 
     assert ctx.species_embeddings.shape == (2, d_model)
     assert ctx.reaction_embeddings.shape == (3, d_model)
@@ -63,26 +63,28 @@ def test_encoder_context_vector_dimension_is_twice_d_model():
     for d_model in (8, 24, 64):
         encoder = BipartiteGNNEncoder(EncoderConfig(d_model=d_model, n_layers=1))
         crn_repr = crn_to_tensor_repr(birth_death())
-        ctx = encoder(crn_repr, torch.tensor([1.0]))
+        ctx = encoder(crn_repr)
         assert ctx.context_vector.shape[0] == 2 * d_model, (
             f"d_model={d_model}: expected context dim {2 * d_model}, "
             f"got {ctx.context_vector.shape[0]}"
         )
 
 
-# ── State sensitivity ─────────────────────────────────────────────────────────
+# ── State independence ────────────────────────────────────────────────────────
 
 
-def test_encoder_different_initial_states_produce_different_context_vectors():
-    """Different initial states must produce distinguishably different context vectors."""
+def test_encoder_output_independent_of_initial_state():
+    """Same CRN produces identical context regardless of how many times it is called."""
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=2))
+    encoder.eval()
     crn_repr = crn_to_tensor_repr(birth_death())
 
-    ctx_low = encoder(crn_repr, torch.tensor([0.0]))
-    ctx_high = encoder(crn_repr, torch.tensor([100.0]))
+    with torch.no_grad():
+        ctx1 = encoder(crn_repr)
+        ctx2 = encoder(crn_repr)
 
-    assert not torch.allclose(ctx_low.context_vector, ctx_high.context_vector), (
-        "Encoder produced identical context for X=0 and X=100 — state input is not used"
+    assert torch.equal(ctx1.context_vector, ctx2.context_vector), (
+        "Encoder produced different contexts for the same CRN in eval mode"
     )
 
 
@@ -94,7 +96,7 @@ def test_encoder_gradients_flow_through_all_parameters():
     encoder parameter (verifies no dead computation graph branches)."""
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=2))
     crn_repr = crn_to_tensor_repr(birth_death())
-    ctx = encoder(crn_repr, torch.tensor([5.0]))
+    ctx = encoder(crn_repr)
     ctx.context_vector.sum().backward()
 
     for name, param in encoder.named_parameters():
@@ -109,10 +111,9 @@ def test_encoder_deterministic_in_eval_mode_with_no_dropout():
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=2, dropout=0.0))
     encoder.eval()
     crn_repr = crn_to_tensor_repr(birth_death())
-    init = torch.tensor([5.0])
 
-    ctx1 = encoder(crn_repr, init)
-    ctx2 = encoder(crn_repr, init)
+    ctx1 = encoder(crn_repr)
+    ctx2 = encoder(crn_repr)
 
     assert torch.allclose(ctx1.context_vector, ctx2.context_vector)
 
@@ -234,19 +235,18 @@ def test_attentive_layer_gradients_flow():
 def test_encoder_attention_and_sum_produce_different_outputs():
     """With identical weights (same seed), attention and sum encoders produce different outputs."""
     crn_repr = crn_to_tensor_repr(lotka_volterra())
-    init_state = torch.tensor([50.0, 20.0])
 
     torch.manual_seed(0)
     enc_sum = BipartiteGNNEncoder(
         EncoderConfig(d_model=16, n_layers=2, use_attention=False)
     )
-    ctx_sum = enc_sum(crn_repr, init_state)
+    ctx_sum = enc_sum(crn_repr)
 
     torch.manual_seed(0)
     enc_att = BipartiteGNNEncoder(
         EncoderConfig(d_model=16, n_layers=2, use_attention=True)
     )
-    ctx_att = enc_att(crn_repr, init_state)
+    ctx_att = enc_att(crn_repr)
 
     assert not torch.allclose(ctx_sum.context_vector, ctx_att.context_vector), (
         "Sum and attentive encoders produced identical outputs — attention has no effect"
@@ -259,7 +259,7 @@ def test_encoder_with_attention_gradients_flow():
         EncoderConfig(d_model=16, n_layers=2, use_attention=True)
     )
     crn_repr = crn_to_tensor_repr(birth_death())
-    ctx = encoder(crn_repr, torch.tensor([5.0]))
+    ctx = encoder(crn_repr)
     ctx.context_vector.sum().backward()
 
     for name, param in encoder.named_parameters():
@@ -303,19 +303,15 @@ def test_species_embedding_output_shape():
     d_model = 16
     config = EncoderConfig(d_model=d_model)
     emb = SpeciesEmbedding(config)
-    out = emb(torch.tensor([5.0, 10.0]))
+    out = emb(n_species=2)
     assert out.shape == (2, d_model)
 
 
-def test_species_embedding_concentration_sensitivity():
-    """Different initial concentrations must produce different embeddings."""
+def test_species_embedding_no_conc_proj():
+    """SpeciesEmbedding should not have a concentration projection layer."""
     config = EncoderConfig(d_model=16)
     emb = SpeciesEmbedding(config)
-    out_low = emb(torch.tensor([0.0]))
-    out_high = emb(torch.tensor([100.0]))
-    assert not torch.allclose(out_low, out_high), (
-        "SpeciesEmbedding is insensitive to initial concentration"
-    )
+    assert not hasattr(emb, "_conc_proj")
 
 
 # ── ReactionEmbedding ─────────────────────────────────────────────────────────

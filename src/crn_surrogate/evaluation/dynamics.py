@@ -52,7 +52,8 @@ class DynamicsVisualizer:
             encoder: Trained bipartite GNN encoder.
             sde: Trained neural SDE.
             crn_repr: Tensor representation of the CRN.
-            initial_state: (n_species,) initial state used for encoding.
+            initial_state: (n_species,) baseline state for evaluating
+                drift/diffusion over a state range.
         """
         device = next(encoder.parameters()).device
         crn_repr = crn_repr.to(device)
@@ -61,7 +62,7 @@ class DynamicsVisualizer:
         encoder.eval()
         sde.eval()
         with torch.no_grad():
-            self._ctx: CRNContext = encoder(crn_repr, initial_state)
+            self._ctx: CRNContext = encoder(crn_repr)
         self._sde = sde
         self._device = device
         self._initial_state = initial_state

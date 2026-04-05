@@ -67,7 +67,6 @@ class ResidualAnalyzer:
         trajectories: torch.Tensor,
         times: torch.Tensor,
         dt: float,
-        initial_state: torch.Tensor,
     ) -> ResidualReport:
         """Compute standardized residuals for all transitions.
 
@@ -82,7 +81,6 @@ class ResidualAnalyzer:
             trajectories: (M, T, n_species) observed trajectories.
             times: (T,) time grid.
             dt: Time step between consecutive observations.
-            initial_state: (n_species,) used to encode the CRN context.
 
         Returns:
             ResidualReport with residuals and diagnostic statistics.
@@ -101,13 +99,12 @@ class ResidualAnalyzer:
         device = next(self._encoder.parameters()).device
         trajectories = trajectories.to(device)
         times = times.to(device)
-        initial_state = initial_state.to(device)
         crn_repr = self._crn_repr.to(device)
 
         self._encoder.eval()
         self._sde.eval()
         with torch.no_grad():
-            ctx = self._encoder(crn_repr, initial_state)
+            ctx = self._encoder(crn_repr)
 
             # Batch all M*(T-1) transitions
             all_y_t = trajectories[:, :-1, :].reshape(
