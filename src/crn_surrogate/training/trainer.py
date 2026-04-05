@@ -164,7 +164,7 @@ class Trainer:
             batch_size=self._train_config.batch_size,
             shuffle=True,
             collate_fn=collator,
-            num_workers=2,
+            num_workers=1,
             pin_memory=True,
             persistent_workers=True,
         )
@@ -509,7 +509,7 @@ class Trainer:
             batch_size=self._train_config.batch_size,
             shuffle=False,
             collate_fn=collator,
-            num_workers=2,
+            num_workers=1,
             pin_memory=True,
             persistent_workers=True,
         )
