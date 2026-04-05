@@ -166,7 +166,6 @@ class Trainer:
             collate_fn=collator,
             num_workers=0,
             pin_memory=True,
-            persistent_workers=True,
         )
 
         for epoch in range(start_epoch, self._train_config.max_epochs + 1):
@@ -511,7 +510,6 @@ class Trainer:
             collate_fn=collator,
             num_workers=0,
             pin_memory=True,
-            persistent_workers=True,
         )
         total_rollout = 0.0
         total_nll = 0.0
