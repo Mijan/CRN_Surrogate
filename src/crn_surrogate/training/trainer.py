@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -18,10 +16,11 @@ from crn_surrogate.configs.training_config import (
     TrainingMode,
 )
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
-from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
+from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
+from crn_surrogate.training.checkpointing import CheckpointManager
 from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
     GaussianTransitionNLL,
@@ -50,6 +49,29 @@ class TrainingResult:
     val_epochs: list[int] = field(default_factory=list)
     grad_norms: list[float] = field(default_factory=list)
     learning_rates: list[float] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PreparedItem:
+    """Single batch item prepared for loss computation.
+
+    Bundles the encoder output, padded trajectories, species mask, time grid,
+    and padded initial state. All tensors use the SDE's full dimensionality
+    (n_species_sde), with inactive species zeroed and masked.
+
+    Attributes:
+        context: Encoder output for this CRN.
+        true_trajs_padded: (M, T, n_species_sde) ground-truth trajectories.
+        species_mask: (n_species_sde,) bool mask; True for active species.
+        times: (T,) evaluation time grid.
+        init_state_padded: (n_species_sde,) initial state (inactive species zero).
+    """
+
+    context: CRNContext
+    true_trajs_padded: torch.Tensor
+    species_mask: torch.Tensor
+    times: torch.Tensor
+    init_state_padded: torch.Tensor
 
 
 class Trainer:
@@ -93,7 +115,12 @@ class Trainer:
             weight_decay=train_config.weight_decay,
         )
         self._scheduler = self._build_scheduler()
-        self._best_val_loss = float("inf")
+
+        self._checkpoint_mgr = CheckpointManager(
+            checkpoint_dir=train_config.checkpoint_dir,
+            wandb_run_name=train_config.wandb_run_name if train_config.use_wandb else None,
+            checkpoint_every=train_config.checkpoint_every,
+        )
 
         self._device = next(encoder.parameters(), torch.zeros(1)).device
         self._timer = PhaseTimer(device=self._device)
@@ -155,25 +182,22 @@ class Trainer:
                 result.val_losses.append(val_loss)
                 result.val_nll_losses.append(val_nll)
                 result.val_epochs.append(epoch)
-                self._maybe_checkpoint(val_nll, epoch)
-                if do_rollout:
-                    print(
-                        f"Epoch {epoch:4d} | train={train_loss:.4f} | "
-                        f"val={val_loss:.4f} | val_nll={val_nll:.4f} | "
-                        f"grad={mean_grad_norm:.3f}"
-                    )
-                else:
-                    print(
-                        f"Epoch {epoch:4d} | train={train_loss:.4f} | "
-                        f"val_nll={val_nll:.4f} | "
-                        f"grad={mean_grad_norm:.3f}"
-                    )
+                self._checkpoint_mgr.save_best(
+                    self._build_state(epoch, val_loss=val_nll), val_nll, epoch
+                )
+                val_part = f"val={val_loss:.4f} | " if do_rollout else ""
+                print(
+                    f"Epoch {epoch:4d} | train={train_loss:.4f} | "
+                    f"{val_part}val_nll={val_nll:.4f} | grad={mean_grad_norm:.3f}"
+                )
             else:
                 print(
                     f"Epoch {epoch:4d} | train={train_loss:.4f} | grad={mean_grad_norm:.3f}"
                 )
 
-            self._periodic_checkpoint(epoch, train_loss)
+            self._checkpoint_mgr.save_periodic(
+                self._build_state(epoch, train_loss=train_loss), epoch, train_loss
+            )
 
             self._csv_logger.log_epoch(epoch, self._timer)
             if self._wandb is not None:
@@ -197,6 +221,42 @@ class Trainer:
         # logging (e.g. saving model artifacts) is complete.
 
         return result
+
+    def load_checkpoint(self, checkpoint: dict) -> int:
+        """Restore training state from a checkpoint.
+
+        Args:
+            checkpoint: Dict loaded from a checkpoint .pt file.
+
+        Returns:
+            The epoch to resume from (checkpoint["epoch"] + 1).
+        """
+        return self._checkpoint_mgr.load(
+            checkpoint, self._encoder, self._sde,
+            self._optimizer, self._scheduler,
+        )
+
+    def _build_state(self, epoch: int, **extra) -> dict:
+        """Build a checkpoint dict from current model and optimizer state.
+
+        Args:
+            epoch: Current epoch number.
+            **extra: Additional metadata fields (e.g. val_loss, train_loss).
+
+        Returns:
+            Dict suitable for torch.save, containing encoder_state, sde_state,
+            optimizer_state, scheduler_state, best_val_loss, epoch, and any
+            extra fields.
+        """
+        return {
+            "epoch": epoch,
+            "encoder_state": self._encoder.state_dict(),
+            "sde_state": self._sde.state_dict(),
+            "optimizer_state": self._optimizer.state_dict(),
+            "scheduler_state": self._scheduler.state_dict(),
+            "best_val_loss": self._checkpoint_mgr.best_val_loss,
+            **extra,
+        }
 
     def _batch_to_device(self, batch: dict) -> dict:
         """Move all tensor values in a batch dict to the training device."""
@@ -239,6 +299,53 @@ class Trainer:
         mean_grad_norm = sum(batch_grad_norms) / denom
         return total_loss / denom, mean_grad_norm
 
+    def _prepare_item(self, batch: dict, idx: int) -> PreparedItem:
+        """Extract, encode, and pad a single item from a collated batch.
+
+        Reconstructs the CRNTensorRepr, runs the encoder, pads trajectories
+        and initial state to the SDE's n_species, and builds the species mask.
+
+        Args:
+            batch: Collated batch dict from CRNCollator.
+            idx: Index of the item within the batch.
+
+        Returns:
+            PreparedItem with all tensors at SDE dimensionality.
+        """
+        n_species_actual = int(batch["species_mask"][idx].sum().item())
+        n_reactions = int(batch["reaction_mask"][idx].sum().item())
+        n_species_sde = self._sde.n_species
+
+        crn_repr = CRNTensorRepr(
+            stoichiometry=batch["stoichiometry"][idx, :n_reactions, :n_species_actual],
+            dependency_matrix=batch["dependency_matrix"][idx, :n_reactions, :n_species_actual],
+            propensity_type_ids=batch["propensity_type_ids"][idx, :n_reactions],
+            propensity_params=batch["propensity_params"][idx, :n_reactions],
+        )
+        ctx = self._encoder(crn_repr)
+
+        true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]  # (M, T, ns)
+        device = true_trajs.device
+
+        species_mask = torch.zeros(n_species_sde, dtype=torch.bool, device=device)
+        species_mask[:n_species_actual] = True
+
+        M, T, _ = true_trajs.shape
+        true_trajs_padded = torch.zeros(M, T, n_species_sde, device=device)
+        true_trajs_padded[:, :, :n_species_actual] = true_trajs
+
+        init_state = batch["initial_states"][idx, :n_species_actual]
+        init_state_padded = torch.zeros(n_species_sde, device=device)
+        init_state_padded[:n_species_actual] = init_state
+
+        return PreparedItem(
+            context=ctx,
+            true_trajs_padded=true_trajs_padded,
+            species_mask=species_mask,
+            times=batch["times"][idx],
+            init_state_padded=init_state_padded,
+        )
+
     def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
         """Compute mean loss over all items in the batch."""
         B = batch["stoichiometry"].shape[0]
@@ -250,58 +357,33 @@ class Trainer:
     def _compute_item_loss(self, batch: dict, idx: int, epoch: int = 1) -> torch.Tensor:
         """Compute loss for a single item in the batch, dispatching on training mode.
 
-        States are padded to the SDE's configured n_species so that a single model
-        handles CRNs with varying numbers of species. When n_species_actual ==
-        n_species_sde the padding is a no-op and behaviour is identical to before.
-        The SDE operates in raw count space; the GaussianTransitionNLL self-normalizes.
+        The SDE operates in raw count space; the GaussianTransitionNLL self-normalizes
+        via residual² / σ² = O(1) regardless of species count scale.
         """
-        crn_repr = self._reconstruct_tensor_repr(batch, idx)
-        n_species_actual = crn_repr.n_species
-        n_species_sde = self._sde.n_species
-
-        init_state = batch["initial_states"][idx, :n_species_actual]
-        true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]  # (M, T, ns)
-
-        # No normalization: SDE operates in raw count space.
-        # The GaussianTransitionNLL self-normalizes via residual^2 / sigma^2.
-        ctx = self._encoder(crn_repr)
-
-        # Species mask for the SDE's full dimensionality
-        species_mask = torch.zeros(
-            n_species_sde, dtype=torch.bool, device=init_state.device
-        )
-        species_mask[:n_species_actual] = True
-
-        # Pad trajectories to SDE dimensionality
-        M, T, _ = true_trajs.shape
-        true_trajs_padded = torch.zeros(M, T, n_species_sde, device=true_trajs.device)
-        true_trajs_padded[:, :, :n_species_actual] = true_trajs
-
-        times = batch["times"][idx]
+        item = self._prepare_item(batch, idx)
         mode = self._effective_mode(epoch)
 
         if mode == TrainingMode.TEACHER_FORCING:
             return self._nll_loss.compute(
                 sde=self._sde,
-                crn_context=ctx,
-                true_trajectory=true_trajs_padded,
-                times=times,
+                crn_context=item.context,
+                true_trajectory=item.true_trajs_padded,
+                times=item.times,
                 dt=self._train_config.dt,
-                mask=species_mask,
+                mask=item.species_mask,
             )
 
-        padded_init = torch.zeros(n_species_sde, device=init_state.device)
-        padded_init[:n_species_actual] = init_state
         k = self._train_config.n_sde_samples
         pred_samples = [
             self._solver.solve(
-                self._sde, padded_init, ctx, times, self._train_config.dt
+                self._sde, item.init_state_padded.clone(), item.context,
+                item.times, self._train_config.dt,
             ).states
             for _ in range(k)
         ]
         pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species_sde)
         return self._rollout_loss.compute(
-            pred_states, true_trajs_padded, mask=species_mask
+            pred_states, item.true_trajs_padded, mask=item.species_mask,
         )
 
     def _effective_mode(self, epoch: int) -> TrainingMode:
@@ -319,21 +401,12 @@ class Trainer:
         progress = (epoch - cfg.scheduled_sampling_start_epoch) / (
             cfg.scheduled_sampling_end_epoch - cfg.scheduled_sampling_start_epoch
         )
+        # TODO: torch.rand is not seeded by the training seed, making scheduled
+        # sampling non-reproducible. Fix by threading a seeded torch.Generator
+        # through TrainingConfig when reproducibility is required.
         if torch.rand(1).item() < progress:
             return TrainingMode.FULL_ROLLOUT
         return TrainingMode.TEACHER_FORCING
-
-    def _reconstruct_tensor_repr(self, batch: dict, idx: int) -> CRNTensorRepr:
-        """Reconstruct a CRNTensorRepr from a padded batch dict for item idx."""
-        n_species = int(batch["species_mask"][idx].sum().item())
-        n_reactions = int(batch["reaction_mask"][idx].sum().item())
-
-        return CRNTensorRepr(
-            stoichiometry=batch["stoichiometry"][idx, :n_reactions, :n_species],
-            dependency_matrix=batch["dependency_matrix"][idx, :n_reactions, :n_species],
-            propensity_type_ids=batch["propensity_type_ids"][idx, :n_reactions],
-            propensity_params=batch["propensity_params"][idx, :n_reactions],
-        )
 
     def _validate(
         self,
@@ -344,7 +417,7 @@ class Trainer:
 
         Args:
             val_dataset: Validation trajectories.
-            compute_rollout: If True, compute the full SDE rollout loss
+            compute_rollout: If True, also compute the full SDE rollout loss
                 (expensive). If False, only compute teacher-forcing NLL.
 
         Returns:
@@ -366,78 +439,41 @@ class Trainer:
         with torch.no_grad():
             for batch in loader:
                 batch = self._batch_to_device(batch)
-                if compute_rollout:
-                    total_rollout += self._compute_batch_rollout_loss(batch).item()
-                total_nll += self._compute_batch_nll(batch).item()
+                B = batch["stoichiometry"].shape[0]
+
+                nll_total = torch.zeros(1, device=batch["stoichiometry"].device)
+                rollout_total = torch.zeros(1, device=batch["stoichiometry"].device)
+
+                for idx in range(B):
+                    item = self._prepare_item(batch, idx)
+                    nll_total = nll_total + self._nll_loss.compute(
+                        sde=self._sde,
+                        crn_context=item.context,
+                        true_trajectory=item.true_trajs_padded,
+                        times=item.times,
+                        dt=self._train_config.dt,
+                        mask=item.species_mask,
+                    )
+                    if compute_rollout:
+                        k = self._train_config.n_sde_samples
+                        pred_samples = [
+                            self._solver.solve(
+                                self._sde, item.init_state_padded.clone(),
+                                item.context, item.times, self._train_config.dt,
+                            ).states
+                            for _ in range(k)
+                        ]
+                        pred_states = torch.stack(pred_samples, dim=0)
+                        rollout_total = rollout_total + self._rollout_loss.compute(
+                            pred_states, item.true_trajs_padded, mask=item.species_mask,
+                        )
+
+                total_nll += (nll_total / B).item()
+                total_rollout += (rollout_total / B).item()
                 n_batches += 1
+
         denom = max(n_batches, 1)
         return total_rollout / denom, total_nll / denom
-
-    def _compute_batch_rollout_loss(self, batch: dict) -> torch.Tensor:
-        """Compute mean rollout loss over all items in the batch (always full rollout)."""
-        B = batch["stoichiometry"].shape[0]
-        n_species_sde = self._sde.n_species
-        total = torch.zeros(1, device=batch["stoichiometry"].device)
-        for idx in range(B):
-            crn_repr = self._reconstruct_tensor_repr(batch, idx)
-            n_species_actual = crn_repr.n_species
-            init_state = batch["initial_states"][idx, :n_species_actual]
-            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
-            ctx = self._encoder(crn_repr)
-            species_mask = torch.zeros(
-                n_species_sde, dtype=torch.bool, device=init_state.device
-            )
-            species_mask[:n_species_actual] = True
-            M, T, _ = true_trajs.shape
-            true_trajs_padded = torch.zeros(
-                M, T, n_species_sde, device=true_trajs.device
-            )
-            true_trajs_padded[:, :, :n_species_actual] = true_trajs
-            times = batch["times"][idx]
-            padded_init = torch.zeros(n_species_sde, device=init_state.device)
-            padded_init[:n_species_actual] = init_state
-            k = self._train_config.n_sde_samples
-            pred_samples = [
-                self._solver.solve(
-                    self._sde, padded_init, ctx, times, self._train_config.dt
-                ).states
-                for _ in range(k)
-            ]
-            pred_states = torch.stack(pred_samples, dim=0)
-            total = total + self._rollout_loss.compute(
-                pred_states, true_trajs_padded, mask=species_mask
-            )
-        return total / B
-
-    def _compute_batch_nll(self, batch: dict) -> torch.Tensor:
-        """Compute mean NLL loss over all items in the batch (teacher forcing)."""
-        B = batch["stoichiometry"].shape[0]
-        n_species_sde = self._sde.n_species
-        total = torch.zeros(1, device=batch["stoichiometry"].device)
-        for idx in range(B):
-            crn_repr = self._reconstruct_tensor_repr(batch, idx)
-            n_species_actual = crn_repr.n_species
-            true_trajs = batch["trajectories"][idx, :, :, :n_species_actual]
-            ctx = self._encoder(crn_repr)
-            species_mask = torch.zeros(
-                n_species_sde, dtype=torch.bool, device=true_trajs.device
-            )
-            species_mask[:n_species_actual] = True
-            M, T, _ = true_trajs.shape
-            true_trajs_padded = torch.zeros(
-                M, T, n_species_sde, device=true_trajs.device
-            )
-            true_trajs_padded[:, :, :n_species_actual] = true_trajs
-            times = batch["times"][idx]
-            total = total + self._nll_loss.compute(
-                sde=self._sde,
-                crn_context=ctx,
-                true_trajectory=true_trajs_padded,
-                times=times,
-                dt=self._train_config.dt,
-                mask=species_mask,
-            )
-        return total / B
 
     def _build_scheduler(
         self,
@@ -465,114 +501,3 @@ class Trainer:
                 self._scheduler.step(val_loss)
         else:
             self._scheduler.step()
-
-    def load_checkpoint(self, checkpoint: dict) -> int:
-        """Restore training state from a checkpoint.
-
-        Loads model weights, optimizer state, scheduler state, and
-        best_val_loss. Returns the next epoch to train (checkpoint epoch + 1).
-
-        Args:
-            checkpoint: Dict loaded from a checkpoint .pt file.
-
-        Returns:
-            The epoch to resume from (checkpoint["epoch"] + 1).
-        """
-        self._encoder.load_state_dict(checkpoint["encoder_state"])
-        self._sde.load_state_dict(checkpoint["sde_state"])
-
-        if "optimizer_state" in checkpoint:
-            self._optimizer.load_state_dict(checkpoint["optimizer_state"])
-        if "scheduler_state" in checkpoint:
-            self._scheduler.load_state_dict(checkpoint["scheduler_state"])
-        if "best_val_loss" in checkpoint:
-            self._best_val_loss = checkpoint["best_val_loss"]
-
-        epoch = checkpoint.get("epoch", 0)
-        print(f"Resumed from epoch {epoch} (best_val_loss={self._best_val_loss:.4f})")
-        return epoch + 1
-
-    def _periodic_checkpoint(self, epoch: int, train_loss: float) -> None:
-        """Save a periodic checkpoint regardless of validation performance.
-
-        These are saved alongside best-validation checkpoints with a distinct
-        filename pattern (periodic_epochN.pt) so they do not interfere. Only the
-        last 3 periodic checkpoints are kept on disk; all versions are preserved
-        in W&B as versioned artifacts.
-        """
-        if self._train_config.checkpoint_every <= 0:
-            return
-        if epoch % self._train_config.checkpoint_every != 0:
-            return
-
-        ckpt_dir = Path(self._train_config.checkpoint_dir)
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-        path = ckpt_dir / f"periodic_epoch{epoch}.pt"
-
-        torch.save(
-            {
-                "epoch": epoch,
-                "encoder_state": self._encoder.state_dict(),
-                "sde_state": self._sde.state_dict(),
-                "optimizer_state": self._optimizer.state_dict(),
-                "scheduler_state": self._scheduler.state_dict(),
-                "best_val_loss": self._best_val_loss,
-                "train_loss": train_loss,
-            },
-            path,
-        )
-
-        # Keep only the last 3 periodic checkpoints on disk (sort numerically by epoch)
-        _max_keep = 3
-        _by_epoch = sorted(
-            ckpt_dir.glob("periodic_epoch*.pt"),
-            key=lambda p: int(p.stem.removeprefix("periodic_epoch")),
-        )
-        for old_file in _by_epoch[:-_max_keep]:
-            old_file.unlink()
-
-        if self._wandb is not None:
-            import wandb
-
-            artifact = wandb.Artifact(
-                name=f"{self._train_config.wandb_run_name}_periodic_checkpoint",
-                type="model-checkpoint",
-                metadata={
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    "checkpoint_type": "periodic",
-                },
-            )
-            artifact.add_file(str(path))
-            wandb.log_artifact(artifact)
-
-    def _maybe_checkpoint(self, val_loss: float, epoch: int) -> None:
-        """Save a checkpoint if validation loss improved."""
-        if val_loss < self._best_val_loss:
-            self._best_val_loss = val_loss
-            Path(self._train_config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
-            path = os.path.join(
-                self._train_config.checkpoint_dir, f"best_epoch{epoch}.pt"
-            )
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "encoder_state": self._encoder.state_dict(),
-                    "sde_state": self._sde.state_dict(),
-                    "optimizer_state": self._optimizer.state_dict(),
-                    "scheduler_state": self._scheduler.state_dict(),
-                    "best_val_loss": self._best_val_loss,
-                    "val_loss": val_loss,
-                },
-                path,
-            )
-            if self._wandb is not None:
-                import wandb
-
-                artifact = wandb.Artifact(
-                    name=f"{self._train_config.wandb_run_name}_model_checkpoint",
-                    type="model-checkpoint",
-                    metadata={"epoch": epoch, "val_loss": val_loss},
-                )
-                artifact.add_file(path)
-                wandb.log_artifact(artifact)
