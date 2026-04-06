@@ -173,6 +173,58 @@ class BipartiteGraphBuilder:
         return feat
 
 
+def merge_bipartite_edges(
+    edges_list: list[BipartiteEdges],
+    n_species_per_graph: list[int],
+    n_reactions_per_graph: list[int],
+) -> BipartiteEdges:
+    """Merge multiple BipartiteEdges into one with offset node indices.
+
+    Creates a single disconnected bipartite graph from B individual graphs.
+    Edge indices are offset so that each graph's nodes occupy a unique range:
+    graph i's species occupy [sum(n_species[:i]), sum(n_species[:i+1])) and
+    similarly for reactions.
+
+    Edge features are concatenated unchanged (they are per-edge properties
+    that don't depend on global node indices).
+
+    Args:
+        edges_list: Per-graph BipartiteEdges, one per CRN.
+        n_species_per_graph: Number of species in each graph.
+        n_reactions_per_graph: Number of reactions in each graph.
+
+    Returns:
+        Single BipartiteEdges for the merged disconnected graph.
+    """
+    r2s_indices: list[torch.Tensor] = []
+    r2s_feats: list[torch.Tensor] = []
+    s2r_indices: list[torch.Tensor] = []
+    s2r_feats: list[torch.Tensor] = []
+
+    spe_offset = 0
+    rxn_offset = 0
+    for edges, ns, nr in zip(edges_list, n_species_per_graph, n_reactions_per_graph):
+        device = edges.rxn_to_species_index.device
+
+        r2s_off = torch.tensor([[rxn_offset], [spe_offset]], device=device)
+        r2s_indices.append(edges.rxn_to_species_index + r2s_off)
+        r2s_feats.append(edges.rxn_to_species_feat)
+
+        s2r_off = torch.tensor([[spe_offset], [rxn_offset]], device=device)
+        s2r_indices.append(edges.species_to_rxn_index + s2r_off)
+        s2r_feats.append(edges.species_to_rxn_feat)
+
+        spe_offset += ns
+        rxn_offset += nr
+
+    return BipartiteEdges(
+        rxn_to_species_index=torch.cat(r2s_indices, dim=1),
+        rxn_to_species_feat=torch.cat(r2s_feats, dim=0),
+        species_to_rxn_index=torch.cat(s2r_indices, dim=1),
+        species_to_rxn_feat=torch.cat(s2r_feats, dim=0),
+    )
+
+
 def _scatter_max(
     src: torch.Tensor,
     index: torch.Tensor,

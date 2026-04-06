@@ -84,7 +84,27 @@ class CRNCollator:
 
     Returns padding masks for species and reactions so that message passing
     and loss computation can ignore padded entries.
+
+    When ``n_species_sde`` is provided, the species dimension of trajectories,
+    initial_states, and species_mask is padded to ``n_species_sde`` (the SDE's
+    fixed state dimension) instead of the per-batch maximum. This lets
+    ``_prepare_item`` skip all per-item padding tensor allocations.
+
+    Note: the return type is a plain ``dict[str, Tensor]``. This is the one
+    place in the codebase where string-keyed dicts are used as an API boundary.
+    It exists because PyTorch's DataLoader requires a dict-based collation
+    interface; typed alternatives would require a custom collate wrapper that
+    adds more complexity than value here.
     """
+
+    def __init__(self, n_species_sde: int | None = None) -> None:
+        """Args:
+        n_species_sde: When provided, pad the species dimension of trajectories,
+            initial_states, and species_mask to this size. Must be >= the
+            maximum n_species in any batch. When None, pads to the batch max
+            (original behaviour).
+        """
+        self._n_species_sde = n_species_sde
 
     def __call__(self, batch: list[TrajectoryItem]) -> dict:
         """Collate a list of TrajectoryItems into a padded batch dict.
@@ -98,31 +118,50 @@ class CRNCollator:
               dependency_matrix:       (B, max_rxn, max_species)
               propensity_params:       (B, max_rxn, max_params)
               propensity_type_ids:     (B, max_rxn) int
-              initial_states:          (B, max_species)
-              trajectories:            (B, M, T, max_species)
+              initial_states:          (B, n_species_pad)
+              trajectories:            (B, M, T, n_species_pad)
               times:                   (B, T)
-              species_mask:            (B, max_species) bool, True = valid
+              species_mask:            (B, n_species_pad) bool, True = valid
               reaction_mask:           (B, max_rxn) bool, True = valid
               cluster_ids:             (B,) int, -1 if unassigned
               input_protocols:         list[InputProtocol] length B
               internal_species_mask:   (B, max_species) bool or None
               scales:                  (B, max_species) float or None
+              crn_reprs:               list[CRNTensorRepr] length B, edges pre-built on CPU
+              n_species_per_item:      list[int] length B
+              n_reactions_per_item:    list[int] length B
+            where n_species_pad = n_species_sde if provided, else max_species.
         """
-        max_species = max(item.crn_repr.n_species for item in batch)
-        max_rxn = max(item.crn_repr.n_reactions for item in batch)
+        # Per-item integer counts — derived from source items (no tensor .item() calls)
+        n_species_per_item: list[int] = [item.crn_repr.n_species for item in batch]
+        n_reactions_per_item: list[int] = [item.crn_repr.n_reactions for item in batch]
+
+        max_species = max(n_species_per_item)
+        max_rxn = max(n_reactions_per_item)
         max_params = max(item.crn_repr.propensity_params.shape[1] for item in batch)
         M = batch[0].trajectories.shape[0]
         T = batch[0].trajectories.shape[1]
         B = len(batch)
 
+        # Determine species padding size for trajectories / initial states / masks
+        if self._n_species_sde is not None:
+            if self._n_species_sde < max_species:
+                raise ValueError(
+                    f"n_species_sde={self._n_species_sde} is smaller than the maximum "
+                    f"n_species in this batch ({max_species}). Cannot pad to SDE size."
+                )
+            n_species_pad = self._n_species_sde
+        else:
+            n_species_pad = max_species
+
         stoich = torch.zeros(B, max_rxn, max_species)
         deps = torch.zeros(B, max_rxn, max_species)
         prop_params = torch.zeros(B, max_rxn, max_params)
         prop_type_ids = torch.zeros(B, max_rxn, dtype=torch.long)
-        init_states = torch.zeros(B, max_species)
-        trajs = torch.zeros(B, M, T, max_species)
+        init_states = torch.zeros(B, n_species_pad)
+        trajs = torch.zeros(B, M, T, n_species_pad)
         times = torch.zeros(B, T)
-        species_mask = torch.zeros(B, max_species, dtype=torch.bool)
+        species_mask = torch.zeros(B, n_species_pad, dtype=torch.bool)
         reaction_mask = torch.zeros(B, max_rxn, dtype=torch.bool)
         cluster_ids = torch.full((B,), fill_value=-1, dtype=torch.long)
 
@@ -138,9 +177,11 @@ class CRNCollator:
         has_scale = any(item.scale is not None for item in batch)
         scales_batch = torch.ones(B, max_species) if has_scale else None
 
+        # Pre-build bipartite edges on CPU so _prepare_item only needs cudaMemcpy
+        crn_reprs: list[CRNTensorRepr] = []
         for i, item in enumerate(batch):
-            ns = item.crn_repr.n_species
-            nr = item.crn_repr.n_reactions
+            ns = n_species_per_item[i]
+            nr = n_reactions_per_item[i]
             np_ = item.crn_repr.propensity_params.shape[1]
 
             stoich[i, :nr, :ns] = item.crn_repr.stoichiometry
@@ -153,6 +194,11 @@ class CRNCollator:
             species_mask[i, :ns] = True
             reaction_mask[i, :nr] = True
             cluster_ids[i] = item.cluster_id
+
+            # Trigger edge build on CPU (fast; avoids GPU kernel launch per item)
+            _ = item.crn_repr.bipartite_edges
+            crn_reprs.append(item.crn_repr)
+
             if has_internal_mask:
                 if item.internal_species_mask is not None:
                     internal_species_mask_batch[i, :ns] = item.internal_species_mask  # type: ignore[index]
@@ -180,4 +226,7 @@ class CRNCollator:
             "input_protocols": [item.input_protocol for item in batch],
             "internal_species_mask": internal_species_mask_batch,
             "scales": scales_batch,
+            "crn_reprs": crn_reprs,
+            "n_species_per_item": n_species_per_item,
+            "n_reactions_per_item": n_reactions_per_item,
         }

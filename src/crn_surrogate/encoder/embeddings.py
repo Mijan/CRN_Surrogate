@@ -44,11 +44,31 @@ class SpeciesEmbedding(nn.Module):
         if device is None:
             device = self._identity_embed.weight.device
         indices = torch.arange(n_species, device=device)
-        h = self._identity_embed(indices)  # (n_species, d_model)
+        return self.embed_from_indices(indices, is_external)
+
+    def embed_from_indices(
+        self,
+        species_indices: torch.Tensor,
+        is_external: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Embed species from pre-built local identity indices.
+
+        Unlike forward(), which constructs arange(n_species), this method
+        accepts a pre-built index tensor. For batched encoding, pass
+        cat([arange(n_s0), arange(n_s1), ...]) so each CRN's species get
+        local identity indices (0, 1, 2, ...) regardless of their position
+        in the concatenated graph.
+
+        Args:
+            species_indices: (total_species,) local identity indices.
+            is_external: (total_species,) boolean tensor.
+
+        Returns:
+            (total_species, d_model) embeddings.
+        """
+        h = self._identity_embed(species_indices)
         if is_external is not None:
-            ext_emb = self._external_proj(
-                is_external.float().unsqueeze(-1)
-            )  # (n_species, d_model)
+            ext_emb = self._external_proj(is_external.float().unsqueeze(-1))
             h = h + ext_emb
         return h
 

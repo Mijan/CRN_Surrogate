@@ -73,10 +73,9 @@ class CRNNeuralSDE(nn.Module):
         Returns:
             (n_species,) or (B, n_species) drift vector.
         """
-        ctx = crn_context.context_vector
-        if protocol_embedding is not None:
-            ctx = torch.cat([ctx, protocol_embedding], dim=-1)
-        return self._drift_net(state, ctx)
+        return self.drift_from_context(
+            t, state, crn_context.context_vector, protocol_embedding
+        )
 
     def diffusion(
         self,
@@ -99,12 +98,69 @@ class CRNNeuralSDE(nn.Module):
             (n_species, n_noise_channels) or (B, n_species, n_noise_channels),
             non-negative (softplus applied).
         """
-        ctx = crn_context.context_vector
+        return self.diffusion_from_context(
+            t, state, crn_context.context_vector, protocol_embedding
+        )
+
+    def drift_from_context(
+        self,
+        t: torch.Tensor,
+        x: torch.Tensor,
+        context_vector: torch.Tensor,
+        protocol_embedding: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute drift from a pre-extracted context vector.
+
+        Unlike drift(), which extracts context_vector from a CRNContext, this
+        method accepts the context vector directly. This enables batched
+        computation where each transition in a (N, n_species) batch has its
+        own context vector from a (N, d_context) tensor.
+
+        Args:
+            t: (N,) or scalar time values.
+            x: (n_species,) or (N, n_species) current states.
+            context_vector: (d_context,) or (N, d_context) context vectors.
+            protocol_embedding: (d_protocol,) or (N, d_protocol) optional
+                protocol embeddings.
+
+        Returns:
+            (n_species,) or (N, n_species) drift values.
+        """
+        ctx = context_vector
         if protocol_embedding is not None:
             ctx = torch.cat([ctx, protocol_embedding], dim=-1)
-        raw = self._diff_net(state, ctx)
-        raw = F.softplus(raw)
+        return self._drift_net(x, ctx)
+
+    def diffusion_from_context(
+        self,
+        t: torch.Tensor,
+        x: torch.Tensor,
+        context_vector: torch.Tensor,
+        protocol_embedding: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute diffusion from a pre-extracted context vector.
+
+        Unlike diffusion(), which extracts context_vector from a CRNContext,
+        this method accepts the context vector directly. This enables batched
+        computation where each transition in a (N, n_species) batch has its
+        own context vector from a (N, d_context) tensor.
+
+        Args:
+            t: (N,) or scalar time values.
+            x: (n_species,) or (N, n_species) current states.
+            context_vector: (d_context,) or (N, d_context) context vectors.
+            protocol_embedding: (d_protocol,) or (N, d_protocol) optional
+                protocol embeddings.
+
+        Returns:
+            (n_species, n_noise_channels) or (N, n_species, n_noise_channels),
+            non-negative (softplus applied).
+        """
+        ctx = context_vector
+        if protocol_embedding is not None:
+            ctx = torch.cat([ctx, protocol_embedding], dim=-1)
+        raw = F.softplus(self._diff_net(x, ctx))
         n_noise = self._config.n_noise_channels
-        if state.dim() == 1:
+        if x.dim() == 1:
             return raw.view(self._n_species, n_noise)
-        return raw.view(state.shape[0], self._n_species, n_noise)
+        return raw.view(x.shape[0], self._n_species, n_noise)
