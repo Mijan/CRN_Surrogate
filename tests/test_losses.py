@@ -12,6 +12,7 @@ from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
     GaussianTransitionNLL,
     MeanMatchingLoss,
+    TransitionNLL,
     VarianceMatchingLoss,
 )
 
@@ -449,3 +450,89 @@ def test_nll_scale_invariance():
         if p.grad is not None:
             assert torch.isfinite(p.grad).all(), "Gradients must be finite"
             assert p.grad.abs().max() > 0, "Gradients must be non-zero"
+
+
+# ── TransitionNLL backward-compat and new behaviour tests ────────────────────
+
+
+def test_backward_compat_alias():
+    from crn_surrogate.training.losses import GaussianTransitionNLL, TransitionNLL
+
+    assert GaussianTransitionNLL is TransitionNLL
+
+
+def test_transition_nll_legacy_no_measurement_model(sde_and_ctx):
+    """TransitionNLL without measurement_model behaves like old GaussianTransitionNLL."""
+    sde, ctx = sde_and_ctx
+    traj = torch.randn(4, 10, N_SPECIES)
+    times = torch.linspace(0, 1, 10)
+    loss = TransitionNLL().compute(sde, ctx, traj, times, dt=0.1)
+    assert loss.shape == ()
+    assert torch.isfinite(loss)
+
+
+def test_transition_nll_with_measurement_model(sde_and_ctx):
+    """TransitionNLL with DirectObservation produces finite loss on high-count data."""
+    from crn_surrogate.measurement.config import MeasurementConfig
+    from crn_surrogate.measurement.direct import DirectObservation
+    from crn_surrogate.training.losses import TransitionNLL
+
+    sde, ctx = sde_and_ctx
+    obs_model = DirectObservation.from_config(MeasurementConfig())
+    loss_fn = TransitionNLL(measurement_model=obs_model)
+
+    # High-count trajectories where process noise alone leads to large NLL
+    traj = (
+        torch.full((4, 10, N_SPECIES), 50_000.0) + torch.randn(4, 10, N_SPECIES) * 100
+    )
+    times = torch.linspace(0, 1, 10)
+    loss = loss_fn.compute(sde, ctx, traj, times, dt=0.1)
+    assert loss.shape == ()
+    assert torch.isfinite(loss)
+
+
+def test_transition_nll_with_measurement_model_end_to_end(sde_and_ctx):
+    """Full forward + backward through SDE + measurement model + NLL."""
+    from crn_surrogate.measurement.config import MeasurementConfig
+    from crn_surrogate.measurement.direct import DirectObservation
+    from crn_surrogate.training.losses import TransitionNLL
+
+    sde, ctx = sde_and_ctx
+    obs_model = DirectObservation.from_config(MeasurementConfig())
+    loss_fn = TransitionNLL(measurement_model=obs_model)
+
+    traj = torch.randn(2, 8, N_SPECIES)
+    times = torch.linspace(0, 1, 8)
+    loss = loss_fn.compute(sde, ctx, traj, times, dt=0.1)
+    loss.backward()
+
+    # Gradients should flow to both the SDE and the measurement model
+    assert all(
+        torch.isfinite(p.grad).all() for p in sde.parameters() if p.grad is not None
+    )
+    assert obs_model._raw_eps.grad is not None
+    assert obs_model._raw_eps.grad.abs().item() > 0.0
+
+
+def test_transition_nll_measurement_model_abc_enforces_log_likelihood():
+    """MeasurementModel subclass without log_likelihood cannot be instantiated."""
+    from crn_surrogate.measurement.base import MeasurementModel
+
+    class IncompleteModel(MeasurementModel):
+        def predict(self, x_latent):
+            return x_latent
+
+        def sample(self, x_latent):
+            return x_latent
+
+        # log_likelihood is not implemented — ABC must reject this
+
+        @property
+        def n_observed(self):
+            return None
+
+        def forward(self, x):
+            return x
+
+    with pytest.raises(TypeError):
+        IncompleteModel()

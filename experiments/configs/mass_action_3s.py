@@ -75,7 +75,7 @@ class MassAction3sV4Config(BaseExperimentConfig):
     maps to the same context vector regardless of initial conditions.
     """
 
-    experiment_name: str = "mass_action_3s_v4"
+    experiment_name: str = "mass_action_3s_v5"
     wandb_group: str = "mass-action-3s"
 
     # Architecture (same as v3)

@@ -99,3 +99,30 @@ def test_sde_config_from_crn_d_protocol_forwarded():
     """from_crn with d_protocol=64 gives config.d_protocol == 64."""
     config = SDEConfig.from_crn(birth_death(), d_protocol=64)
     assert config.d_protocol == 64
+
+
+# ── ModelConfig + MeasurementConfig ──────────────────────────────────────────
+
+
+def test_model_config_includes_measurement():
+    """ModelConfig has a measurement field with a MeasurementConfig default."""
+    from crn_surrogate.configs.model_config import ModelConfig
+    from crn_surrogate.measurement.config import MeasurementConfig
+
+    cfg = ModelConfig()
+    assert isinstance(cfg.measurement, MeasurementConfig)
+
+
+def test_measurement_config_defaults():
+    """MeasurementConfig default values are as specified."""
+    from crn_surrogate.measurement.config import (
+        MeasurementConfig,
+        NoiseMode,
+        NoiseSharing,
+    )
+
+    cfg = MeasurementConfig()
+    assert cfg.min_variance == 1e-2
+    assert cfg.noise.mode == NoiseMode.LEARNED
+    assert cfg.noise.sharing == NoiseSharing.SHARED
+    assert cfg.noise.init_value == 0.02

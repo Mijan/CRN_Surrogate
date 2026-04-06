@@ -17,13 +17,14 @@ from crn_surrogate.configs.training_config import (
 )
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
+from crn_surrogate.measurement.direct import DirectObservation
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.checkpointing import CheckpointManager
 from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
-    GaussianTransitionNLL,
     TrajectoryLoss,
+    TransitionNLL,
 )
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
 
@@ -101,13 +102,27 @@ class Trainer:
         self._sde = sde
         self._model_config = model_config
         self._train_config = train_config
-        self._nll_loss = GaussianTransitionNLL(min_variance=1e-2)
         self._rollout_loss = (
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
         self._solver = EulerMaruyamaSolver(model_config.sde)
 
-        params = list(encoder.parameters()) + list(sde.parameters())
+        # Construct measurement model and NLL loss
+        measurement_config = model_config.measurement
+        self._measurement_model: DirectObservation = DirectObservation.from_config(
+            measurement_config,
+            n_species=model_config.sde.n_noise_channels,
+        )
+        self._nll_loss = TransitionNLL(
+            measurement_model=self._measurement_model,
+            min_variance=measurement_config.min_variance,
+        )
+
+        params = (
+            list(encoder.parameters())
+            + list(sde.parameters())
+            + list(self._measurement_model.parameters())
+        )
         self._optimizer = torch.optim.AdamW(
             params,
             lr=train_config.lr,
@@ -214,6 +229,11 @@ class Trainer:
                     metrics["val_nll"] = val_nll
                 if val_loss is not None and val_loss != 0.0:
                     metrics["val_loss"] = val_loss
+                if self._measurement_model is not None and hasattr(
+                    self._measurement_model, "eps"
+                ):
+                    eps_val = self._measurement_model.eps
+                    metrics["obs_eps"] = eps_val.mean().item()
                 self._wandb.log_epoch(metrics)
                 self._wandb.log_phase_timings(self._timer)
 
@@ -228,19 +248,30 @@ class Trainer:
     def load_checkpoint(self, checkpoint: dict) -> int:
         """Restore training state from a checkpoint.
 
+        Old checkpoints without ``measurement_model_state`` load without error;
+        the measurement model keeps its initialized values.
+
         Args:
             checkpoint: Dict loaded from a checkpoint .pt file.
 
         Returns:
             The epoch to resume from (checkpoint["epoch"] + 1).
         """
-        return self._checkpoint_mgr.load(
+        start_epoch = self._checkpoint_mgr.load(
             checkpoint,
             self._encoder,
             self._sde,
             self._optimizer,
             self._scheduler,
         )
+        if (
+            "measurement_model_state" in checkpoint
+            and self._measurement_model is not None
+        ):
+            self._measurement_model.load_state_dict(
+                checkpoint["measurement_model_state"]
+            )
+        return start_epoch
 
     def _build_state(self, epoch: int, **extra) -> dict:
         """Build a checkpoint dict from current model and optimizer state.
@@ -254,7 +285,7 @@ class Trainer:
             optimizer_state, scheduler_state, best_val_loss, epoch, and any
             extra fields.
         """
-        return {
+        state = {
             "epoch": epoch,
             "encoder_state": self._encoder.state_dict(),
             "sde_state": self._sde.state_dict(),
@@ -263,6 +294,9 @@ class Trainer:
             "best_val_loss": self._checkpoint_mgr.best_val_loss,
             **extra,
         }
+        if self._measurement_model is not None:
+            state["measurement_model_state"] = self._measurement_model.state_dict()
+        return state
 
     def _batch_to_device(self, batch: dict) -> dict:
         """Move all tensor values in a batch dict to the training device."""
@@ -290,8 +324,11 @@ class Trainer:
             with self._timer.time("backward"):
                 loss.backward()
             # clip_grad_norm_ returns the pre-clipping total norm — free diagnostic
+            all_params = list(self._encoder.parameters()) + list(self._sde.parameters())
+            if self._measurement_model is not None:
+                all_params += list(self._measurement_model.parameters())
             total_norm = nn.utils.clip_grad_norm_(
-                list(self._encoder.parameters()) + list(self._sde.parameters()),
+                all_params,
                 self._train_config.grad_clip_norm,
             )
             batch_grad_norms.append(total_norm.item())
@@ -441,12 +478,22 @@ class Trainer:
         all_drift = self._sde.drift_from_context(t_all, y_t, ctx_expanded, None)
         all_G = self._sde.diffusion_from_context(t_all, y_t, ctx_expanded, None)
 
-        # Per-transition Gaussian NLL: ½ (residual²/σ² + log σ²)
         mu = y_t + all_drift * dt  # (B * n_trans, S)
         variance = (all_G**2).sum(dim=-1) * dt  # (B * n_trans, S)
         variance = variance.clamp(min=self._nll_loss._min_variance)
-        residual = y_next - mu
-        nll = 0.5 * (residual**2 / variance + variance.log())  # (B * n_trans, S)
+
+        if self._measurement_model is not None:
+            # Combine process and observation variance via the measurement model
+            log_lik = self._measurement_model.log_likelihood(
+                y_observed=y_next,
+                x_predicted=mu,
+                process_variance=variance,
+            )
+            nll = -log_lik  # (B * n_trans, S)
+        else:
+            # Legacy: Gaussian NLL with process variance only
+            residual = y_next - mu
+            nll = 0.5 * (residual**2 / variance + variance.log())  # (B * n_trans, S)
 
         # Apply species masks and normalize per item
         masks = torch.stack([item.species_mask for item in items])  # (B, S)

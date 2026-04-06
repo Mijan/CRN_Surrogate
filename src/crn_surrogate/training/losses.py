@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 
+from crn_surrogate.measurement.base import MeasurementModel
+
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import ResolvedProtocol
     from crn_surrogate.encoder.bipartite_gnn import CRNContext
@@ -133,26 +135,51 @@ class VarianceMatchingLoss(TrajectoryLoss):
         return (diff**2).mean() / scale
 
 
-class GaussianTransitionNLL(nn.Module):
-    """One-step Gaussian negative log-likelihood for SDE training.
+class TransitionNLL(nn.Module):
+    """One-step negative log-likelihood for SDE teacher-forcing training.
 
     Evaluates the log-likelihood of observed transitions under the
-    Euler-Maruyama Gaussian model, using teacher forcing (each step
-    starts from the true state, not the predicted state).
+    Euler-Maruyama model. Two modes are supported:
 
-    The diagonal NLL per transition is:
-        NLL = ½ Σ_s [ (y_{s,t+1} - μ_s)² / σ²_s + log(σ²_s) ]
-    where
-        μ_s = y_s + F_θ[s] · dt
-        σ²_s = ||G_θ[s, :]||² · dt
+    **Without measurement model (legacy)**: Gaussian NLL using process variance only.
+        NLL = ½ Σ_s [ (y_{s,t+1} - μ_s)² / σ²_proc,s + log(σ²_proc,s) ]
+
+    **With measurement model (e.g., DirectObservation)**: combines process and
+    observation variance via the measurement model's ``log_likelihood`` method.
+        v_total = σ²_proc + (eps · μ)²
+        NLL = ½ Σ_s [ (y_{s,t+1} - μ_s)² / v_total,s + log(v_total,s) ]
+
+    The observation noise is crucial at high molecule counts (X ~ 100k) where CLE
+    process noise is negligible relative to the state magnitude. Even a 1% drift
+    prediction error produces a residual far larger than the process variance,
+    causing catastrophic NLL spikes. The proportional observation noise
+    (sigma_obs = eps * x) absorbs moderate drift errors gracefully.
+
+    In both cases, teacher forcing is used: each step starts from the true
+    observed state, not the predicted state.
+
+    Attributes:
+        _measurement_model: Optional measurement model for combining variances.
+        _min_variance: Floor for process variance.
     """
 
-    def __init__(self, *, min_variance: float = 1e-6) -> None:
+    def __init__(
+        self,
+        *,
+        measurement_model: MeasurementModel | None = None,
+        # Default 1e-2: SSA data is inherently noisy. A variance floor below 1.0
+        # is not physically meaningful for molecule counts and causes catastrophic
+        # NLL spikes when residuals are even moderately large.
+        min_variance: float = 1e-2,
+    ) -> None:
         """Args:
-        min_variance: Floor for predicted variance to prevent
-            log(0) and division by zero.
+        measurement_model: If None, legacy behavior (process variance only, Gaussian
+            NLL). If provided, its ``log_likelihood`` method is called to
+            combine process and observation variance.
+        min_variance: Floor for process variance from the SDE diffusion.
         """
         super().__init__()
+        self._measurement_model = measurement_model
         self._min_variance = min_variance
 
     def compute(
@@ -198,9 +225,7 @@ class GaussianTransitionNLL(nn.Module):
 
         M, T, n_species = true_trajectory.shape
         if T < 2:
-            raise ValueError(
-                f"GaussianTransitionNLL requires T >= 2 time steps, got T={T}"
-            )
+            raise ValueError(f"TransitionNLL requires T >= 2 time steps, got T={T}")
 
         # Reshape all M*(T-1) transitions into a single batch
         all_y_t = true_trajectory[:, :-1, :].reshape(
@@ -224,13 +249,28 @@ class GaussianTransitionNLL(nn.Module):
         variance = variance.clamp(min=self._min_variance)
 
         residual = all_y_next - mu  # (M*(T-1), n_species)
-        nll = 0.5 * (residual**2 / variance + variance.log())  # (M*(T-1), n_species)
+
+        if self._measurement_model is not None:
+            log_lik = self._measurement_model.log_likelihood(
+                y_observed=all_y_next,
+                x_predicted=mu,
+                process_variance=variance,
+            )
+            nll = -log_lik  # (M*(T-1), n_species)
+        else:
+            # Legacy: Gaussian NLL with process variance only
+            nll = 0.5 * (
+                residual**2 / variance + variance.log()
+            )  # (M*(T-1), n_species)
 
         if mask is not None:
             nll = nll * mask.float()
 
         n_dims = int(mask.sum().item()) if mask is not None else n_species
         return nll.sum() / (M * (T - 1) * n_dims)
+
+
+GaussianTransitionNLL = TransitionNLL  # backward compatibility
 
 
 class CombinedTrajectoryLoss(TrajectoryLoss):
