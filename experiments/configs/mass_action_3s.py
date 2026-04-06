@@ -64,6 +64,7 @@ class MassAction3sConfig(BaseExperimentConfig):
 
     batch_size: int = 64
 
+
 @dataclass(frozen=True)
 class MassAction3sV5Config(BaseExperimentConfig):
     """Mass-action 3s v4: state-independent encoder.
@@ -107,6 +108,7 @@ class MassAction3sV5Config(BaseExperimentConfig):
         )
     )
 
+
 @dataclass(frozen=True)
 class MassAction3sV4Config(BaseExperimentConfig):
     """Mass-action 3s v4: state-independent encoder.
@@ -149,7 +151,6 @@ class MassAction3sV4Config(BaseExperimentConfig):
             n_ssa_trajectories=64,
         )
     )
-
 
 
 @dataclass(frozen=True)

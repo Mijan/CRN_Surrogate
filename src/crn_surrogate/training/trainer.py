@@ -107,12 +107,16 @@ class Trainer:
         )
         self._solver = EulerMaruyamaSolver(model_config.sde)
 
+        self._device = next(encoder.parameters(), torch.zeros(1)).device
+
         # Construct measurement model and NLL loss
         measurement_config = model_config.measurement
         self._measurement_model: DirectObservation = DirectObservation.from_config(
             measurement_config,
             n_species=model_config.sde.n_noise_channels,
         )
+        self._measurement_model.to(self._device)
+
         self._nll_loss = TransitionNLL(
             measurement_model=self._measurement_model,
             min_variance=measurement_config.min_variance,
@@ -137,8 +141,6 @@ class Trainer:
             else None,
             checkpoint_every=train_config.checkpoint_every,
         )
-
-        self._device = next(encoder.parameters(), torch.zeros(1)).device
         self._timer = PhaseTimer(device=self._device)
         self._csv_logger = ProfileLogger(train_config.log_dir)
         self._wandb: WandbLogger | None = None
