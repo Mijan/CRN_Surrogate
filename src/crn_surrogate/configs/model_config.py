@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from crn_surrogate.measurement.config import MeasurementConfig
+
 if TYPE_CHECKING:
     from crn_surrogate.crn.crn import CRN
 
@@ -153,6 +155,10 @@ class ModelConfig:
 
     encoder: EncoderConfig = EncoderConfig()
     sde: SDEConfig = SDEConfig()
+    measurement: MeasurementConfig = MeasurementConfig()
 
     def __repr__(self) -> str:
-        return f"ModelConfig(encoder={self.encoder!r}, sde={self.sde!r})"
+        return (
+            f"ModelConfig(encoder={self.encoder!r}, sde={self.sde!r}, "
+            f"measurement={self.measurement!r})"
+        )

@@ -166,5 +166,5 @@ class CheckpointManager:
             type="model-checkpoint",
             metadata=metadata,
         )
-        artifact.add_file(str(path))
+        artifact.add_file(str(path.resolve()))
         wandb.log_artifact(artifact)

@@ -66,6 +66,51 @@ class MassAction3sConfig(BaseExperimentConfig):
 
 
 @dataclass(frozen=True)
+class MassAction3sV5Config(BaseExperimentConfig):
+    """Mass-action 3s v4: state-independent encoder.
+
+    Same hyperparameters as v4. The only change is architectural:
+    the encoder no longer receives initial_state, producing a purely
+    topological/kinetic CRN context. This ensures the same CRN always
+    maps to the same context vector regardless of initial conditions.
+    """
+
+    experiment_name: str = "mass_action_3s_v5"
+    wandb_group: str = "mass-action-3s"
+
+    # Architecture (same as v3)
+    max_n_species: int = 3
+    max_n_reactions: int = 6
+    d_model: int = 128
+    n_encoder_layers: int = 3
+    d_hidden: int = 256
+    n_sde_hidden_layers: int = 3
+
+    # Dropout (same as v3)
+    context_dropout: float = 0.1
+    mlp_dropout: float = 0.1
+
+    # Training (same as v3 witch changed batch size)
+    max_epochs: int = 1000
+    batch_size: int = 512
+    lr: float = 1e-3
+    dt: float = 0.1
+    val_every: int = 5
+    n_ssa_samples: int = 16  # matches n_ssa_trajectories / n_init_conditions
+    checkpoint_every: int = 10  # save every 10 epochs; keep last 3 on disk
+    scheduler_type: str = "reduce_on_plateau"
+
+    # Dataset (same as v3)
+    dataset: DatasetConfig = field(
+        default_factory=lambda: DatasetConfig(
+            n_train=50000,
+            n_val=5000,
+            n_ssa_trajectories=64,
+        )
+    )
+
+
+@dataclass(frozen=True)
 class MassAction3sV4Config(BaseExperimentConfig):
     """Mass-action 3s v4: state-independent encoder.
 

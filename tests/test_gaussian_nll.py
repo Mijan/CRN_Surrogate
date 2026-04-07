@@ -134,7 +134,9 @@ def test_gaussian_nll_no_nan_when_diffusion_is_zero():
 
 def test_gaussian_nll_gradient_increases_variance_when_too_small():
     """When predicted σ² is too small, gradient should push it up (log_sigma up)."""
-    loss_fn = GaussianTransitionNLL()
+    # Use low min_variance so the small sigma is not clamped; this test is checking
+    # gradient direction, not the min_variance default.
+    loss_fn = GaussianTransitionNLL(min_variance=1e-6)
     # Use small sigma: exp(log_sigma) = exp(-3) ≈ 0.05
     sde = ConstantDriftDiffusion(n_species=1, n_noise=1)
     with torch.no_grad():

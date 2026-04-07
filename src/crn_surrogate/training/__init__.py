@@ -6,6 +6,7 @@ from crn_surrogate.training.losses import (
     GaussianTransitionNLL,
     MeanMatchingLoss,
     TrajectoryLoss,
+    TransitionNLL,
     VarianceMatchingLoss,
 )
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
@@ -22,6 +23,7 @@ __all__ = [
     "Trainer",
     "TrainingResult",
     "TrajectoryLoss",
+    "TransitionNLL",
     "VarianceMatchingLoss",
     "WandbLogger",
 ]

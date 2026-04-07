@@ -17,6 +17,12 @@ from crn_surrogate.configs.training_config import (
     TrainingConfig,
     TrainingMode,
 )
+from crn_surrogate.measurement.config import (
+    MeasurementConfig,
+    NoiseConfig,
+    NoiseMode,
+    NoiseSharing,
+)
 
 
 @dataclass(frozen=True)
@@ -76,6 +82,12 @@ class BaseExperimentConfig:
         0  # Save a periodic checkpoint every N epochs (0 to disable)
     )
 
+    # ── Measurement ──────────────────────────────────────────────────────
+    noise_mode: str = "learned"  # "learned" or "fixed"
+    noise_sharing: str = "shared"  # "shared" or "per_species"
+    noise_init_eps: float = 0.02
+    min_variance: float = 1e-2
+
     # ── Builders ─────────────────────────────────────────────────────────
 
     def build_encoder_config(self) -> EncoderConfig:
@@ -99,11 +111,27 @@ class BaseExperimentConfig:
             mlp_dropout=self.mlp_dropout,
         )
 
+    def build_measurement_config(self) -> MeasurementConfig:
+        """Build measurement model configuration."""
+        mode = NoiseMode.LEARNED if self.noise_mode == "learned" else NoiseMode.FIXED
+        sharing = (
+            NoiseSharing.SHARED
+            if self.noise_sharing == "shared"
+            else NoiseSharing.PER_SPECIES
+        )
+        return MeasurementConfig(
+            noise=NoiseConfig(
+                mode=mode, sharing=sharing, init_value=self.noise_init_eps
+            ),
+            min_variance=self.min_variance,
+        )
+
     def build_model_config(self) -> ModelConfig:
-        """Build the full model config (encoder + SDE)."""
+        """Build the full model config (encoder + SDE + measurement)."""
         return ModelConfig(
             encoder=self.build_encoder_config(),
             sde=self.build_sde_config(),
+            measurement=self.build_measurement_config(),
         )
 
     def build_training_config(self, *, use_wandb: bool = True) -> TrainingConfig:
