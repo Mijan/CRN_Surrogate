@@ -12,7 +12,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-from scipy.integrate import solve_ivp
 
 from crn_surrogate.crn.crn import CRN
 from crn_surrogate.data.generation.configs import ODEPreScreenConfig
@@ -59,53 +58,33 @@ class ODEPreScreen:
         self._config = config
 
     def check(self, crn: CRN, initial_state: torch.Tensor) -> PreScreenResult:
-        """Run ODE integration and classify the dynamics.
-
-        Args:
-            crn: The CRN to evaluate.
-            initial_state: (n_species,) initial molecule counts.
-
-        Returns:
-            PreScreenResult with acceptance decision and classification.
-        """
         cfg = self._config
-        x0 = initial_state.numpy().astype(np.float64)
+        x = initial_state.numpy().astype(np.float64).copy()
+        n_steps = 200
+        dt = cfg.t_max / n_steps
+        trajectory = np.zeros((n_steps + 1, len(x)))
+        trajectory[0] = x
 
-        def rhs(t: float, x: np.ndarray) -> np.ndarray:
+        stoich = crn.stoichiometry_matrix.numpy().T  # (n_species, n_reactions)
+
+        for i in range(n_steps):
             x_clamped = np.maximum(x, 0.0)
             x_tensor = torch.tensor(x_clamped, dtype=torch.float32)
-            propensities = crn.evaluate_propensities(x_tensor, t)
-            stoich = crn.stoichiometry_matrix.numpy().T  # (n_species, n_reactions)
-            return stoich @ propensities.numpy()
+            props = crn.evaluate_propensities(x_tensor, i * dt).numpy()
+            dx = stoich @ props
+            x = x + dt * dx
+            x = np.maximum(x, 0.0)  # clamp negative
+            trajectory[i + 1] = x
 
-        try:
-            sol = solve_ivp(
-                rhs,
-                (0.0, cfg.t_max),
-                x0,
-                method="RK45",
-                max_step=cfg.max_step,
-                atol=1e-6,
-                rtol=1e-3,
-            )
-        except Exception:
-            return PreScreenResult(
-                accepted=False,
-                dynamics_type=DynamicsType.BLOWUP,
-                max_value=float("inf"),
-                final_values=x0,
-            )
+            if np.any(x > cfg.blowup_threshold):
+                return PreScreenResult(
+                    accepted=False,
+                    dynamics_type=DynamicsType.BLOWUP,
+                    max_value=float(np.max(x)),
+                    final_values=x,
+                )
 
-        if not sol.success:
-            return PreScreenResult(
-                accepted=False,
-                dynamics_type=DynamicsType.BLOWUP,
-                max_value=float("inf"),
-                final_values=x0,
-            )
-
-        trajectory = sol.y.T  # (T, n_species)
-        return self._classify(trajectory, x0)
+        return self._classify(trajectory, initial_state.numpy())
 
     def _classify(self, trajectory: np.ndarray, x0: np.ndarray) -> PreScreenResult:
         """Classify ODE trajectory and decide acceptance.
