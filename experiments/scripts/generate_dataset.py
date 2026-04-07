@@ -24,8 +24,9 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
-from crn_surrogate.data.generation.configs import CurationConfig
+from crn_surrogate.data.generation.configs import CurationConfig, ODEPreScreenConfig
 from crn_surrogate.data.generation.curation import ViabilityFilter
+from crn_surrogate.data.generation.ode_prescreen import ODEPreScreen
 from crn_surrogate.data.generation.mass_action_generator import MassActionCRNGenerator
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
@@ -187,6 +188,7 @@ def _generate_split(
     checkpoint_fn: Callable[[list[TrajectoryItem], str], None] | None = None,
     checkpoint_every: int = 50,
     resume_items: list[TrajectoryItem] | None = None,
+    ode_prescreen: ODEPreScreen | None = None,
 ) -> tuple[list[TrajectoryItem], dict]:
     """Generate one dataset split, returning (items, metadata_dict).
 
@@ -206,6 +208,7 @@ def _generate_split(
         checkpoint_fn: Optional callback called every checkpoint_every items.
         checkpoint_every: Checkpoint interval in number of accepted items.
         resume_items: Pre-existing items to resume from.
+        ode_prescreen: Optional pre-screener; rejects boring dynamics before SSA.
 
     Returns:
         Tuple of (items, stats_dict).
@@ -223,7 +226,7 @@ def _generate_split(
     }
     filter_ = ViabilityFilter(CurationConfig())
     n_trajs_per_init = max(1, n_ssa_trajectories // n_init_conditions)
-    max_attempts = n_items * 5
+    max_attempts = n_items * 10
 
     pbar = tqdm(total=n_items, initial=len(items), desc="generating", unit="item")
 
@@ -242,6 +245,21 @@ def _generate_split(
             )
 
             stats["n_attempted"] += 1
+
+            # ODE pre-screen: reject boring dynamics before expensive SSA
+            if ode_prescreen is not None:
+                prescreen_result = ode_prescreen.check(crn, init_state)
+                if not prescreen_result.accepted:
+                    stats.setdefault("n_ode_rejected", 0)
+                    stats["n_ode_rejected"] += 1
+                    pbar.set_postfix(
+                        ode_rej=stats["n_ode_rejected"],
+                        rate=f"{stats['n_curated_pass']}/{stats['n_attempted']}",
+                    )
+                    continue
+                stats.setdefault("n_ode_accepted", 0)
+                stats["n_ode_accepted"] += 1
+
             traj_tensor = simulate_fn(
                 crn, init_state, t_max, n_trajs_per_init, time_grid, sim_timeout
             )
@@ -306,6 +324,12 @@ def _generate_split(
     )
     print(f"  Species distribution:   {stats['n_species_dist']}")
     print(f"  Reactions distribution: {stats['n_reactions_dist']}")
+    if "n_ode_rejected" in stats:
+        print(
+            f"  ODE pre-screen: {stats.get('n_ode_accepted', 0)} accepted, "
+            f"{stats['n_ode_rejected']} rejected "
+            f"({stats['n_ode_rejected'] / stats['n_attempted']:.0%} rejection rate)"
+        )
 
     if len(items) < n_items:
         warnings.warn(
@@ -327,6 +351,7 @@ def generate(
     sim_timeout: int = 30,
     n_init_conditions: int = 1,
     use_fast_ssa: bool = True,
+    use_ode_prescreen: bool = True,
     resume_train: Path | None = None,
     resume_val: Path | None = None,
 ) -> None:
@@ -341,6 +366,7 @@ def generate(
         sim_timeout: Per-CRN wall-clock timeout in seconds (0 to disable).
         n_init_conditions: Number of distinct initial conditions per CRN topology.
         use_fast_ssa: Whether to attempt the Numba-accelerated fast SSA path.
+        use_ode_prescreen: Whether to run ODE pre-screening to reject boring dynamics.
         resume_train: Optional checkpoint path to resume training split from.
         resume_val: Optional checkpoint path to resume validation split from.
     """
@@ -392,6 +418,11 @@ def generate(
 
     simulate_fn = _make_simulator(use_fast_ssa, ssa, fast_ssa)
 
+    ode_prescreen = None
+    if use_ode_prescreen:
+        ode_prescreen = ODEPreScreen(ODEPreScreenConfig(t_max=cfg.dataset.t_max))
+        print("ODE pre-screening enabled")
+
     resume_train_items = None
     if resume_train is not None:
         loaded = torch.load(resume_train, weights_only=False)
@@ -418,6 +449,7 @@ def generate(
         checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "train", use_wandb),
         checkpoint_every=checkpoint_every,
         resume_items=resume_train_items,
+        ode_prescreen=ode_prescreen,
     )
 
     print(f"Generating {cfg.dataset.n_val} validation items...")
@@ -434,6 +466,7 @@ def generate(
         checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "val", use_wandb),
         checkpoint_every=checkpoint_every,
         resume_items=resume_val_items,
+        ode_prescreen=ode_prescreen,
     )
 
     train_path = output_dir / f"{cfg.experiment_name}_train.pt"
@@ -514,6 +547,11 @@ def main() -> None:
         action="store_true",
         help="Disable Numba-accelerated SSA (use standard GillespieSSA)",
     )
+    parser.add_argument(
+        "--no-ode-prescreen",
+        action="store_true",
+        help="Disable ODE pre-screening (accept all topologies)",
+    )
     args = parser.parse_args()
 
     cfg = get_config(args.config)
@@ -526,6 +564,7 @@ def main() -> None:
         sim_timeout=args.sim_timeout,
         n_init_conditions=args.n_init_conditions,
         use_fast_ssa=not args.no_fast_ssa,
+        use_ode_prescreen=not args.no_ode_prescreen,
         resume_train=Path(args.resume_train) if args.resume_train else None,
         resume_val=Path(args.resume_val) if args.resume_val else None,
     )
