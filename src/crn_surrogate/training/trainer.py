@@ -19,6 +19,7 @@ from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.measurement.direct import DirectObservation
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.simulator.state_transform import get_state_transform
 from crn_surrogate.training.checkpointing import CheckpointManager
@@ -107,9 +108,14 @@ class Trainer:
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
         self._state_transform = get_state_transform(model_config.sde.use_log1p)
-        self._solver = EulerMaruyamaSolver(
-            model_config.sde, state_transform=self._state_transform
-        )
+        if model_config.sde.deterministic:
+            self._solver: EulerMaruyamaSolver | EulerODESolver = EulerODESolver(
+                model_config.sde, state_transform=self._state_transform
+            )
+        else:
+            self._solver = EulerMaruyamaSolver(
+                model_config.sde, state_transform=self._state_transform
+            )
 
         self._device = next(encoder.parameters(), torch.zeros(1)).device
 

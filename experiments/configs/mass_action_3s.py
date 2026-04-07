@@ -226,6 +226,71 @@ class MassAction3sV4Config(BaseExperimentConfig):
 
 
 @dataclass(frozen=True)
+class MassAction3sDetConfig(BaseExperimentConfig):
+    """Deterministic proof-of-concept: ODE trajectories, no stochastic noise.
+
+    Fast iteration path for validating the full pipeline (surrogate training,
+    edit analysis, policy learning) before scaling to stochastic systems.
+
+    Key differences from stochastic configs:
+    - n_ssa_samples=1 (single deterministic trajectory per item)
+    - Smaller dataset (ODE generation is fast, less data needed)
+    - No measurement noise model needed (but kept for architecture compat)
+    """
+
+    experiment_name: str = "mass_action_3s_det"
+    wandb_group: str = "mass-action-3s-det"
+
+    # Architecture
+    max_n_species: int = 3
+    max_n_reactions: int = 7
+    d_model: int = 128
+    n_encoder_layers: int = 3
+    d_hidden: int = 256
+    n_sde_hidden_layers: int = 3
+
+    # Regularization
+    context_dropout: float = 0.1
+    mlp_dropout: float = 0.1
+
+    # Training
+    max_epochs: int = 500
+    batch_size: int = 256
+    lr: float = 1e-3
+    dt: float = 0.1
+    val_every: int = 5
+    n_ssa_samples: int = 1  # M=1: single deterministic trajectory
+    checkpoint_every: int = 20
+    scheduler_type: str = "reduce_on_plateau"
+
+    # Log1p transform (if implemented, otherwise set False)
+    use_log1p: bool = False
+    deterministic: bool = True  # Use EulerODESolver — no noise at train/eval time
+
+    # Dataset
+    dataset: DatasetConfig = field(
+        default_factory=lambda: DatasetConfig(
+            generator=MassActionGeneratorConfig(
+                topology=RandomTopologyConfig(
+                    n_species_range=(2, 3),
+                    n_reactions_range=(3, 7),
+                    max_reactant_order=2,
+                    max_product_count=2,
+                ),
+                rate_constant_range=(0.01, 10.0),
+            ),
+            n_train=20000,
+            n_val=2000,
+            n_ssa_trajectories=1,  # ignored for deterministic, but kept consistent
+            t_max=20.0,
+            n_time_points=100,
+            initial_state_mean=10.0,
+            initial_state_spread=3.0,
+        )
+    )
+
+
+@dataclass(frozen=True)
 class MassAction3sV3Config(BaseExperimentConfig):
     """Mass-action 3s v3: larger dataset, dropout, multiple initial conditions."""
 

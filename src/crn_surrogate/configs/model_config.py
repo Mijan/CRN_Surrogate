@@ -81,6 +81,7 @@ class SDEConfig:
     d_protocol: int = 0  # protocol encoder output dim; 0 means no protocol conditioning
     mlp_dropout: float = 0.0
     use_log1p: bool = False  # Run SDE in log1p-transformed state space
+    deterministic: bool = False  # Use EulerODESolver (drift only, no noise)
 
     def __post_init__(self) -> None:
         if self.n_hidden_layers < 1:

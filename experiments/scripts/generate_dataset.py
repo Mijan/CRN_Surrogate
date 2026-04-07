@@ -99,6 +99,62 @@ def _simulate_with_timeout(
             return None
 
 
+def _simulate_ode(
+    crn,
+    initial_state: torch.Tensor,
+    t_max: float,
+    time_grid: torch.Tensor,
+    *,
+    n_substeps: int = 10,
+    blowup_threshold: float = 1e5,
+) -> torch.Tensor | None:
+    """Integrate the deterministic mass-action ODE via forward Euler.
+
+    Produces a single deterministic trajectory. Returns a (1, T, n_species)
+    tensor to match the stochastic TrajectoryItem format (M=1).
+
+    Args:
+        crn: The CRN to simulate.
+        initial_state: (n_species,) initial molecule counts.
+        t_max: End time (unused, derived from time_grid).
+        time_grid: (T,) time points at which to record the state.
+        n_substeps: Euler substeps between consecutive grid points.
+        blowup_threshold: Abort and return None if any state exceeds this.
+
+    Returns:
+        (1, T, n_species) trajectory tensor, or None if blowup detected.
+    """
+    import numpy as np
+
+    T = len(time_grid)
+    n_species = initial_state.shape[0]
+    stoich = crn.stoichiometry_matrix.numpy().T  # (n_species, n_reactions)
+
+    x = initial_state.numpy().astype(np.float64).copy()
+    recorded = np.zeros((T, n_species), dtype=np.float64)
+    recorded[0] = x
+
+    for t_idx in range(1, T):
+        dt_segment = (time_grid[t_idx] - time_grid[t_idx - 1]).item()
+        dt_sub = dt_segment / n_substeps
+
+        for _ in range(n_substeps):
+            x_clamped = np.maximum(x, 0.0)
+            x_tensor = torch.tensor(x_clamped, dtype=torch.float32)
+            props = crn.evaluate_propensities(x_tensor, 0.0).numpy()
+            dx = stoich @ props
+            x = x + dt_sub * dx
+            x = np.maximum(x, 0.0)
+
+            if np.any(x > blowup_threshold) or np.any(np.isnan(x)):
+                return None
+
+        recorded[t_idx] = x
+
+    # Return as (1, T, n_species) to match TrajectoryItem format
+    return torch.tensor(recorded, dtype=torch.float32).unsqueeze(0)
+
+
 def _make_simulator(
     use_fast_ssa: bool,
     ssa: GillespieSSA,
@@ -354,6 +410,7 @@ def generate(
     use_ode_prescreen: bool = True,
     resume_train: Path | None = None,
     resume_val: Path | None = None,
+    deterministic: bool = False,
 ) -> None:
     """Run dataset generation and optionally log as a W&B artifact.
 
@@ -369,6 +426,8 @@ def generate(
         use_ode_prescreen: Whether to run ODE pre-screening to reject boring dynamics.
         resume_train: Optional checkpoint path to resume training split from.
         resume_val: Optional checkpoint path to resume validation split from.
+        deterministic: If True, generate deterministic ODE trajectories instead
+            of stochastic SSA (M=1 per item).
     """
     torch.manual_seed(seed)
 
@@ -417,6 +476,12 @@ def generate(
             use_fast_ssa = False
 
     simulate_fn = _make_simulator(use_fast_ssa, ssa, fast_ssa)
+
+    if deterministic:
+        def det_simulate_fn(crn, init_state, t_max, n_traj, time_grid, timeout):
+            return _simulate_ode(crn, init_state, t_max, time_grid)
+        simulate_fn = det_simulate_fn
+        print("Using deterministic ODE simulation (M=1 per item)")
 
     ode_prescreen = None
     if use_ode_prescreen:
@@ -552,6 +617,11 @@ def main() -> None:
         action="store_true",
         help="Disable ODE pre-screening (accept all topologies)",
     )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Generate deterministic ODE trajectories instead of stochastic SSA",
+    )
     args = parser.parse_args()
 
     cfg = get_config(args.config)
@@ -567,6 +637,7 @@ def main() -> None:
         use_ode_prescreen=not args.no_ode_prescreen,
         resume_train=Path(args.resume_train) if args.resume_train else None,
         resume_val=Path(args.resume_val) if args.resume_val else None,
+        deterministic=args.deterministic,
     )
 
 

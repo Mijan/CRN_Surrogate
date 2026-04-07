@@ -84,6 +84,7 @@ class BaseExperimentConfig:
 
     # ── State transform ──────────────────────────────────────────────────
     use_log1p: bool = False  # Run SDE in log1p-transformed state space
+    deterministic: bool = False  # Use EulerODESolver (drift only, no noise)
 
     # ── Measurement ──────────────────────────────────────────────────────
     noise_mode: str = "learned"  # "learned" or "fixed"
@@ -113,6 +114,7 @@ class BaseExperimentConfig:
             d_protocol=self.d_protocol,
             mlp_dropout=self.mlp_dropout,
             use_log1p=self.use_log1p,
+            deterministic=self.deterministic,
         )
 
     def build_measurement_config(self) -> MeasurementConfig:
