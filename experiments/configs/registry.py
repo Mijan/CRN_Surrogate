@@ -56,6 +56,7 @@ from experiments.configs.mass_action_3s import (  # noqa: E402
     MassAction3sV4Config,
     MassAction3sV5Config,
     MassAction3sV7Config,
+    MassAction3sV8Config,
 )
 
 register("mass_action_3s", MassAction3sConfig)
@@ -63,3 +64,4 @@ register("mass_action_3s_v3", MassAction3sV3Config)
 register("mass_action_3s_v4", MassAction3sV4Config)
 register("mass_action_3s_v5", MassAction3sV5Config)
 register("mass_action_3s_v7", MassAction3sV7Config)
+register("mass_action_3s_v8", MassAction3sV8Config)

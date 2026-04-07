@@ -82,6 +82,9 @@ class BaseExperimentConfig:
         0  # Save a periodic checkpoint every N epochs (0 to disable)
     )
 
+    # ── State transform ──────────────────────────────────────────────────
+    use_log1p: bool = False  # Run SDE in log1p-transformed state space
+
     # ── Measurement ──────────────────────────────────────────────────────
     noise_mode: str = "learned"  # "learned" or "fixed"
     noise_sharing: str = "shared"  # "shared" or "per_species"
@@ -109,6 +112,7 @@ class BaseExperimentConfig:
             clip_state=True,
             d_protocol=self.d_protocol,
             mlp_dropout=self.mlp_dropout,
+            use_log1p=self.use_log1p,
         )
 
     def build_measurement_config(self) -> MeasurementConfig:

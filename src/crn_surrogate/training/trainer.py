@@ -20,6 +20,7 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.measurement.direct import DirectObservation
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
+from crn_surrogate.simulator.state_transform import get_state_transform
 from crn_surrogate.training.checkpointing import CheckpointManager
 from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
@@ -105,7 +106,10 @@ class Trainer:
         self._rollout_loss = (
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
-        self._solver = EulerMaruyamaSolver(model_config.sde)
+        self._state_transform = get_state_transform(model_config.sde.use_log1p)
+        self._solver = EulerMaruyamaSolver(
+            model_config.sde, state_transform=self._state_transform
+        )
 
         self._device = next(encoder.parameters(), torch.zeros(1)).device
 
@@ -457,6 +461,8 @@ class Trainer:
 
         # Stack trajectories: (B, M, T, S)
         all_trajs = torch.stack([item.true_trajs_padded for item in items])
+        if self._state_transform is not None:
+            all_trajs = self._state_transform.transform_trajectory(all_trajs)
 
         # Extract transitions: (B * n_trans, S)
         y_t = all_trajs[:, :, :-1, :].reshape(B * n_trans, S)

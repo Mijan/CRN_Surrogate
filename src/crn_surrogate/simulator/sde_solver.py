@@ -8,6 +8,7 @@ from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulation.trajectory import Trajectory
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.state_transform import StateTransform
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import ResolvedProtocol
@@ -19,11 +20,15 @@ class EulerMaruyamaSolver:
     X(t+dt) = X(t) + f(X, t) * dt + g(X, t) * sqrt(dt) * Z,  Z ~ N(0, I)
     """
 
-    def __init__(self, config: SDEConfig) -> None:
+    def __init__(
+        self, config: SDEConfig, state_transform: StateTransform | None = None
+    ) -> None:
         """Args:
         config: SDE configuration (clip_state flag lives here).
+        state_transform: Optional transform applied to state before/after integration.
         """
         self._config = config
+        self._state_transform = state_transform
 
     def solve(
         self,
@@ -62,6 +67,8 @@ class EulerMaruyamaSolver:
         )
 
         state = initial_state.clone().float()
+        if self._state_transform is not None:
+            state = self._state_transform.forward(state)
 
         # Set initial external species values from the protocol.
         if input_protocol is not None:
@@ -92,6 +99,8 @@ class EulerMaruyamaSolver:
             span_idx += 1
 
         states = torch.stack(recorded_states, dim=0)
+        if self._state_transform is not None:
+            states = self._state_transform.inverse_trajectory(states)
         return Trajectory(times=t_span, states=states)
 
     def _step(

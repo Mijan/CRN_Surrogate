@@ -9,6 +9,7 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
 from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
+from crn_surrogate.simulator.state_transform import get_state_transform
 
 
 class ModelEvaluator:
@@ -31,7 +32,8 @@ class ModelEvaluator:
         """
         self._encoder = encoder
         self._sde = sde
-        self._solver = EulerMaruyamaSolver(sde_config)
+        state_transform = get_state_transform(sde_config.use_log1p)
+        self._solver = EulerMaruyamaSolver(sde_config, state_transform=state_transform)
 
     def rollout(
         self,
