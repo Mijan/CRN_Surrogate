@@ -111,6 +111,41 @@ class MassAction3sV5Config(BaseExperimentConfig):
 
 
 @dataclass(frozen=True)
+class MassAction3sV7Config(BaseExperimentConfig):
+    """Mass-action 3s v7: ODE-prescreened balanced dataset, fresh training."""
+
+    experiment_name: str = "mass_action_3s_v7"
+    wandb_group: str = "mass-action-3s"
+
+    max_n_species: int = 3
+    max_n_reactions: int = 6
+    d_model: int = 128
+    n_encoder_layers: int = 3
+    d_hidden: int = 256
+    n_sde_hidden_layers: int = 3
+
+    context_dropout: float = 0.2
+    mlp_dropout: float = 0.2
+
+    max_epochs: int = 1000
+    batch_size: int = 512
+    lr: float = 1e-3
+    dt: float = 0.1
+    val_every: int = 5
+    n_ssa_samples: int = 16
+    checkpoint_every: int = 10
+    scheduler_type: str = "reduce_on_plateau"
+
+    dataset: DatasetConfig = field(
+        default_factory=lambda: DatasetConfig(
+            n_train=30000,
+            n_val=3000,
+            n_ssa_trajectories=32,
+        )
+    )
+
+
+@dataclass(frozen=True)
 class MassAction3sV4Config(BaseExperimentConfig):
     """Mass-action 3s v4: state-independent encoder.
 
