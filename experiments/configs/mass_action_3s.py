@@ -98,7 +98,7 @@ class MassAction3sV5Config(BaseExperimentConfig):
     val_every: int = 5
     n_ssa_samples: int = 16  # matches n_ssa_trajectories / n_init_conditions
     checkpoint_every: int = 10  # save every 10 epochs; keep last 3 on disk
-    scheduler_type = "reduce_on_plateau"
+    scheduler_type: str = "reduce_on_plateau"
 
     # Dataset (same as v3)
     dataset: DatasetConfig = field(
