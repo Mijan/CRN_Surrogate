@@ -547,6 +547,11 @@ def main() -> None:
         action="store_true",
         help="Disable Numba-accelerated SSA (use standard GillespieSSA)",
     )
+    parser.add_argument(
+        "--no-ode-prescreen",
+        action="store_true",
+        help="Disable ODE pre-screening (accept all topologies)",
+    )
     args = parser.parse_args()
 
     cfg = get_config(args.config)
@@ -559,6 +564,7 @@ def main() -> None:
         sim_timeout=args.sim_timeout,
         n_init_conditions=args.n_init_conditions,
         use_fast_ssa=not args.no_fast_ssa,
+        use_ode_prescreen=not args.no_ode_prescreen,
         resume_train=Path(args.resume_train) if args.resume_train else None,
         resume_val=Path(args.resume_val) if args.resume_val else None,
     )
