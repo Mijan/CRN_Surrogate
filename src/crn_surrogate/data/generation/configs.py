@@ -40,6 +40,24 @@ class CurationConfig:
 
 
 @dataclass(frozen=True)
+class ODEPreScreenConfig:
+    """Configuration for ODE-based pre-screening.
+
+    Attributes:
+        t_max: Integration end time for the pre-screen ODE.
+        max_step: Maximum RK45 step size.
+        blowup_threshold: Reject if any value exceeds this.
+        min_sustained_level: Minimum species level to count as "sustained"
+            (not decayed to zero).
+    """
+
+    t_max: float = 20.0
+    max_step: float = 0.5
+    blowup_threshold: float = 1e5
+    min_sustained_level: float = 0.5
+
+
+@dataclass(frozen=True)
 class GenerationConfig:
     """Top-level configuration for the full data generation run.
 
