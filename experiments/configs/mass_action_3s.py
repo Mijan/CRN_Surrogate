@@ -93,7 +93,7 @@ class MassAction3sV5Config(BaseExperimentConfig):
     # Training (same as v3 witch changed batch size)
     max_epochs: int = 1000
     batch_size: int = 512
-    lr: float = 1e-4
+    lr: float = 1e-3
     dt: float = 0.1
     val_every: int = 5
     n_ssa_samples: int = 16  # matches n_ssa_trajectories / n_init_conditions
