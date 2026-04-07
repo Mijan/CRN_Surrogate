@@ -248,7 +248,8 @@ def main() -> None:
         if checkpoint is not None:
             encoder.load_state_dict(checkpoint["encoder_state"])
             sde.load_state_dict(checkpoint["sde_state"])
-            print(f"Loaded model weights from checkpoint. Starting fresh training with config LR={train_config.lr}, scheduler={train_config.scheduler_type}")
+            start_epoch = checkpoint.get("epoch", 0) + 1
+            print(f"Loaded model weights from checkpoint. Starting fresh training from epoch {start_epoch} with config LR={train_config.lr}, scheduler={train_config.scheduler_type}")
         else:
             print("No checkpoint loaded. Starting from scratch.")
     if args.resume:
@@ -260,6 +261,7 @@ def main() -> None:
             print("No checkpoint loaded. Starting from scratch.")
 
     # ── Train ────────────────────────────────────────────────────────────────
+    Path(train_config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     result = trainer.train(train_dataset, val_dataset, start_epoch=start_epoch)
 
     # ── Save checkpoint as W&B artifact ──────────────────────────────────────
