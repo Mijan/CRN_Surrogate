@@ -45,7 +45,9 @@ class TestODESimulation:
         initial_state = torch.tensor([10.0])
         # Use a very low threshold so that linear growth from ~10 to >1000 triggers it.
         time_grid = torch.linspace(0.0, 100.0, 100)
-        result = _simulate_ode(crn, initial_state, 100.0, time_grid, blowup_threshold=1e3)
+        result = _simulate_ode(
+            crn, initial_state, 100.0, time_grid, blowup_threshold=1e3
+        )
         assert result is None
 
     def test_lotka_volterra_oscillates(self):
@@ -82,7 +84,9 @@ class TestDeterministicSolver:
         with torch.no_grad():
             crn_context = encoder(crn_repr)
 
-        sde_config = SDEConfig(d_model=64, d_hidden=128, n_noise_channels=crn.n_reactions)
+        sde_config = SDEConfig(
+            d_model=64, d_hidden=128, n_noise_channels=crn.n_reactions
+        )
         sde = CRNNeuralSDE(sde_config, n_species=crn.n_species)
 
         ode_solver = EulerODESolver(sde_config)
@@ -96,14 +100,22 @@ class TestDeterministicSolver:
         """Two EulerODESolver rollouts from the same state should be identical."""
         ode_solver, _, sde, initial_state, crn_context, t_span = solver_setup
         with torch.no_grad():
-            traj1 = ode_solver.solve(sde, initial_state.clone(), crn_context, t_span, dt=0.1)
-            traj2 = ode_solver.solve(sde, initial_state.clone(), crn_context, t_span, dt=0.1)
+            traj1 = ode_solver.solve(
+                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+            )
+            traj2 = ode_solver.solve(
+                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+            )
         torch.testing.assert_close(traj1.states, traj2.states)
 
     def test_ode_solver_differs_from_stochastic(self, solver_setup):
         """EulerODESolver should differ from EulerMaruyamaSolver (with overwhelming probability)."""
         ode_solver, stoch_solver, sde, initial_state, crn_context, t_span = solver_setup
         with torch.no_grad():
-            det_traj = ode_solver.solve(sde, initial_state.clone(), crn_context, t_span, dt=0.1)
-            stoch_traj = stoch_solver.solve(sde, initial_state.clone(), crn_context, t_span, dt=0.1)
+            det_traj = ode_solver.solve(
+                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+            )
+            stoch_traj = stoch_solver.solve(
+                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+            )
         assert not torch.allclose(det_traj.states, stoch_traj.states)

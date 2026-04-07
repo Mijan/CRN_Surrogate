@@ -4,4 +4,10 @@ from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 
-__all__ = ["ConditionedMLP", "FiLMLayer", "CRNNeuralSDE", "EulerODESolver", "EulerMaruyamaSolver"]
+__all__ = [
+    "ConditionedMLP",
+    "FiLMLayer",
+    "CRNNeuralSDE",
+    "EulerODESolver",
+    "EulerMaruyamaSolver",
+]
