@@ -11,7 +11,7 @@ from crn_surrogate.measurement.base import MeasurementModel
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import ResolvedProtocol
     from crn_surrogate.encoder.bipartite_gnn import CRNContext
-    from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+    from crn_surrogate.simulator.base import StochasticSurrogate
 
 
 class TrajectoryLoss(ABC):
@@ -184,7 +184,7 @@ class TransitionNLL(nn.Module):
 
     def compute(
         self,
-        sde: CRNNeuralSDE,
+        sde: StochasticSurrogate,
         crn_context: CRNContext,
         true_trajectory: torch.Tensor,
         times: torch.Tensor,

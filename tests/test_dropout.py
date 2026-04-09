@@ -3,7 +3,7 @@
 Covers:
 - context_dropout is active in training mode, inactive in eval mode.
 - mlp_dropout in ConditionedMLP is active in training, inactive in eval.
-- Both drift and diffusion networks in CRNNeuralSDE respect mlp_dropout.
+- Both drift and diffusion networks in NeuralSDE respect mlp_dropout.
 """
 
 import pytest
@@ -14,7 +14,7 @@ from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulator.conditioned_mlp import ConditionedMLP
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.neural_sde import NeuralSDE
 
 # ── Encoder context dropout ────────────────────────────────────────────────────
 
@@ -95,11 +95,11 @@ def test_conditioned_mlp_dropout_inactive_in_eval_mode():
     assert torch.equal(out1, out2)
 
 
-# ── CRNNeuralSDE mlp_dropout ──────────────────────────────────────────────────
+# ── NeuralSDE mlp_dropout ──────────────────────────────────────────────────
 
 
 @pytest.fixture()
-def sde_with_dropout() -> CRNNeuralSDE:
+def sde_with_dropout() -> NeuralSDE:
     config = SDEConfig(
         d_model=16,
         d_hidden=32,
@@ -107,7 +107,7 @@ def sde_with_dropout() -> CRNNeuralSDE:
         n_hidden_layers=2,
         mlp_dropout=0.9,
     )
-    return CRNNeuralSDE(config, n_species=2)
+    return NeuralSDE(config, n_species=2)
 
 
 def test_sde_drift_dropout_active_in_train_mode(sde_with_dropout):

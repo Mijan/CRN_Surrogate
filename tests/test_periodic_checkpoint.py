@@ -20,7 +20,9 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.neural_sde import NeuralSDE
+from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.trainer import Trainer
 
 # ── Shared setup ─────────────────────────────────────────────────────────────
@@ -33,8 +35,9 @@ def _small_model():
         sde=SDEConfig.from_crn(crn, d_model=8, d_hidden=16),
     )
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=1)
-    return encoder, sde, model_config, crn
+    sde = NeuralSDE(model_config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
+    return encoder, sde, solver, model_config, crn
 
 
 def _make_dataset(
@@ -72,7 +75,7 @@ def _make_dataset(
 
 def test_periodic_checkpoint_saved_at_interval(tmp_path):
     """Periodic checkpoints are saved at the configured interval."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = str(tmp_path / "ckpt")
     config = TrainingConfig(
         max_epochs=9,
@@ -83,7 +86,7 @@ def test_periodic_checkpoint_saved_at_interval(tmp_path):
         checkpoint_dir=ckpt_dir,
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
 
     periodic_files = {f for f in os.listdir(ckpt_dir) if f.startswith("periodic_epoch")}
@@ -96,7 +99,7 @@ def test_periodic_checkpoint_saved_at_interval(tmp_path):
 
 def test_periodic_checkpoint_independent_of_validation(tmp_path):
     """Periodic checkpoints are saved even without a validation dataset."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = str(tmp_path / "ckpt")
     config = TrainingConfig(
         max_epochs=6,
@@ -107,7 +110,7 @@ def test_periodic_checkpoint_independent_of_validation(tmp_path):
         checkpoint_dir=ckpt_dir,
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     # No val_dataset — periodic checkpoints must still be created
     trainer.train(_make_dataset(crn))
 
@@ -117,7 +120,7 @@ def test_periodic_checkpoint_independent_of_validation(tmp_path):
 
 def test_periodic_checkpoint_cleanup_keeps_last_three(tmp_path):
     """Only the last 3 periodic checkpoints are kept on disk."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = str(tmp_path / "ckpt")
     config = TrainingConfig(
         max_epochs=10,
@@ -128,7 +131,7 @@ def test_periodic_checkpoint_cleanup_keeps_last_three(tmp_path):
         checkpoint_dir=ckpt_dir,
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
 
     # Epochs 2, 4, 6, 8, 10 → 5 checkpoints generated → only last 3 kept
@@ -140,7 +143,7 @@ def test_periodic_checkpoint_cleanup_keeps_last_three(tmp_path):
 
 def test_periodic_checkpoint_contains_full_state(tmp_path):
     """Periodic checkpoints contain optimizer, scheduler, and best_val_loss."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = tmp_path / "ckpt"
     config = TrainingConfig(
         max_epochs=4,
@@ -151,7 +154,7 @@ def test_periodic_checkpoint_contains_full_state(tmp_path):
         checkpoint_dir=str(ckpt_dir),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
 
     ckpt_path = ckpt_dir / "periodic_epoch4.pt"
@@ -160,7 +163,7 @@ def test_periodic_checkpoint_contains_full_state(tmp_path):
     for key in (
         "epoch",
         "encoder_state",
-        "sde_state",
+        "model_state",
         "optimizer_state",
         "scheduler_state",
         "best_val_loss",
@@ -172,7 +175,7 @@ def test_periodic_checkpoint_contains_full_state(tmp_path):
 
 def test_periodic_checkpoint_disabled_by_default(tmp_path):
     """checkpoint_every=0 produces no periodic checkpoints."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = str(tmp_path / "ckpt")
     config = TrainingConfig(
         max_epochs=4,
@@ -183,7 +186,7 @@ def test_periodic_checkpoint_disabled_by_default(tmp_path):
         checkpoint_dir=ckpt_dir,
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
 
     if os.path.exists(ckpt_dir):
@@ -195,7 +198,7 @@ def test_periodic_checkpoint_disabled_by_default(tmp_path):
 
 def test_resume_from_periodic_checkpoint(tmp_path):
     """Training can resume from a periodic checkpoint."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = tmp_path / "ckpt"
     config = TrainingConfig(
         max_epochs=4,
@@ -206,14 +209,14 @@ def test_resume_from_periodic_checkpoint(tmp_path):
         checkpoint_dir=str(ckpt_dir),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
 
     ckpt_path = ckpt_dir / "periodic_epoch2.pt"
     assert ckpt_path.exists()
 
     # Resume from epoch 2 and train 2 more epochs
-    encoder2, sde2, model_config2, _ = _small_model()
+    encoder2, sde2, solver2, model_config2, _ = _small_model()
     config2 = TrainingConfig(
         max_epochs=6,
         batch_size=4,
@@ -223,7 +226,7 @@ def test_resume_from_periodic_checkpoint(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt2"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer2 = Trainer(encoder2, sde2, model_config2, config2)
+    trainer2 = Trainer(encoder2, sde2, model_config2, config2, simulator=solver2)
     ckpt = torch.load(ckpt_path, weights_only=False)
     start_epoch = trainer2.load_checkpoint(ckpt)
     assert start_epoch == 3  # epoch 2 + 1

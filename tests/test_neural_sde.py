@@ -10,17 +10,17 @@ Covers:
 - Solver works for multi-species CRNs (Lotka-Volterra).
 - NeuralDrift has no diffusion network and is a SurrogateModel but not StochasticSurrogate.
 - NeuralSDE is both SurrogateModel and StochasticSurrogate.
-- CRNNeuralSDE alias works identically to NeuralSDE.
 """
 
 import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
+from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE, NeuralDrift, NeuralSDE
+from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -38,7 +38,7 @@ def _make_context(crn, d_model: int = 16):
 def test_drift_output_shape_equals_n_species():
     """drift() must return a vector of length n_species."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
     )
     drift = sde.drift(torch.tensor(0.0), torch.tensor([5.0]), ctx)
@@ -49,7 +49,7 @@ def test_diffusion_output_shape_is_n_species_by_n_noise():
     """diffusion() must return a matrix of shape (n_species, n_noise_channels)."""
     ctx = _make_context(birth_death())
     n_noise = 4
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=n_noise), n_species=1
     )
     diff = sde.diffusion(torch.tensor(0.0), torch.tensor([5.0]), ctx)
@@ -59,7 +59,7 @@ def test_diffusion_output_shape_is_n_species_by_n_noise():
 def test_diffusion_values_are_nonnegative():
     """The diffusion matrix uses softplus, so all entries must be >= 0."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
     )
     diff = sde.diffusion(torch.tensor(0.0), torch.randn(1), ctx)
@@ -72,10 +72,10 @@ def test_diffusion_values_are_nonnegative():
 def test_solver_trajectory_shape_matches_time_grid():
     """Solved trajectory must have one state per time-grid point."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
     )
-    solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
+    solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 5.0, 12)
     traj = solver.solve(sde, torch.tensor([5.0]), ctx, t_span, dt=0.1)
     assert traj.states.shape == (12, 1)
@@ -84,11 +84,11 @@ def test_solver_trajectory_shape_matches_time_grid():
 def test_solver_with_clip_state_keeps_states_nonnegative():
     """clip_state=True must clamp negative states to zero after every EM step."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, clip_state=True),
         n_species=1,
     )
-    solver = EulerMaruyamaSolver(SDEConfig(d_model=16, clip_state=True))
+    solver = EulerMaruyamaSolver(SolverConfig(clip_state=True))
     t_span = torch.linspace(0.0, 10.0, 30)
     traj = solver.solve(sde, torch.tensor([0.0]), ctx, t_span, dt=0.05)
     assert (traj.states >= 0.0).all()
@@ -98,12 +98,12 @@ def test_solver_without_clip_state_clip_min_geq_noclip_min():
     """With clip_state=False and a large diffusion coefficient, clipped >= no-clip minimum."""
     torch.manual_seed(0)
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, clip_state=False),
         n_species=1,
     )
-    solver_noclip = EulerMaruyamaSolver(SDEConfig(d_model=16, clip_state=False))
-    solver_clip = EulerMaruyamaSolver(SDEConfig(d_model=16, clip_state=True))
+    solver_noclip = EulerMaruyamaSolver(SolverConfig(clip_state=False))
+    solver_clip = EulerMaruyamaSolver(SolverConfig(clip_state=True))
     t_span = torch.linspace(0.0, 10.0, 30)
 
     traj_clip = solver_clip.solve(sde, torch.tensor([0.0]), ctx, t_span, dt=0.5)
@@ -119,10 +119,10 @@ def test_solver_without_clip_state_clip_min_geq_noclip_min():
 def test_solver_lotka_volterra_two_species_trajectory_shape():
     """Solver must handle 2-species CRNs and return (T, 2) state trajectories."""
     ctx = _make_context(lotka_volterra(), d_model=16)
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=8), n_species=2
     )
-    solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
+    solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 5.0, 10)
     traj = solver.solve(sde, torch.tensor([10.0, 5.0]), ctx, t_span, dt=0.1)
     assert traj.states.shape == (10, 2)
@@ -134,10 +134,10 @@ def test_solver_lotka_volterra_two_species_trajectory_shape():
 def test_solver_gradients_flow_through_trajectory_to_sde_parameters():
     """A loss on the solved trajectory must propagate gradients to the SDE parameters."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
     )
-    solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
+    solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 2.0, 5)
     traj = solver.solve(sde, torch.tensor([5.0]), ctx, t_span, dt=0.1)
     traj.states.sum().backward()
@@ -152,7 +152,7 @@ def test_solver_gradients_flow_through_trajectory_to_sde_parameters():
 def test_sde_with_d_protocol_zero_behaves_identically():
     """d_protocol=0 (default): drift/diffusion shapes match pre-Phase-2."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=0),
         n_species=1,
     )
@@ -167,7 +167,7 @@ def test_sde_with_d_protocol_positive_accepts_embedding():
     """d_protocol>0: drift/diffusion work with protocol_embedding provided."""
     d_protocol = 32
     ctx = _make_context(birth_death(), d_model=16)
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
         n_species=1,
     )
@@ -184,7 +184,7 @@ def test_sde_different_protocol_embeddings_produce_different_outputs():
     """Same CRN context, different protocol embeddings must give different drift."""
     d_protocol = 16
     ctx = _make_context(birth_death(), d_model=16)
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
         n_species=1,
     )
@@ -200,10 +200,10 @@ def test_sde_different_protocol_embeddings_produce_different_outputs():
 def test_solver_with_no_protocol_matches_pre_phase2():
     """EulerMaruyamaSolver with no protocol args produces trajectory of correct shape."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
     )
-    solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
+    solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 5.0, 20)
     traj = solver.solve(sde, torch.tensor([0.0]), ctx, t_span, dt=0.1)
     assert traj.states.shape == (20, 1)
@@ -251,10 +251,10 @@ def test_solver_with_input_protocol_clamps_external_species():
     protocol = InputProtocol(schedules={1: sched})
     ext_mask = torch.tensor([False, True])
 
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=2
     )
-    solver = EulerMaruyamaSolver(SDEConfig(d_model=16, clip_state=True))
+    solver = EulerMaruyamaSolver(SolverConfig(clip_state=True))
     t_span = torch.linspace(0.0, 10.0, 50)
     resolved = ResolvedProtocol(
         protocol=protocol,
@@ -278,10 +278,10 @@ def test_solver_with_input_protocol_clamps_external_species():
 def test_solver_with_resolved_protocol_none_works():
     """EulerMaruyamaSolver with resolved_protocol=None produces a trajectory normally."""
     ctx = _make_context(birth_death())
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
     )
-    solver = EulerMaruyamaSolver(SDEConfig(d_model=16))
+    solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0, 5, 10)
     traj = solver.solve(
         sde, torch.tensor([0.0]), ctx, t_span, dt=0.1, resolved_protocol=None
@@ -331,6 +331,3 @@ def test_neural_drift_drift_output_shape():
     assert drift.shape == (1,)
 
 
-def test_crn_neural_sde_alias_is_neural_sde():
-    """CRNNeuralSDE is an alias for NeuralSDE and produces identical results."""
-    assert CRNNeuralSDE is NeuralSDE

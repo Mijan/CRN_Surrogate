@@ -10,7 +10,7 @@ from torch.distributions import Normal
 
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.base import StochasticSurrogate
 
 _MIN_VARIANCE: float = 1e-6
 
@@ -50,7 +50,7 @@ class ResidualAnalyzer:
     def __init__(
         self,
         encoder: BipartiteGNNEncoder,
-        sde: CRNNeuralSDE,
+        sde: StochasticSurrogate,
         crn_repr: CRNTensorRepr,
     ) -> None:
         """Args:

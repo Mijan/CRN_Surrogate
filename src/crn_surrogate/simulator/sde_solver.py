@@ -4,27 +4,27 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from crn_surrogate.configs.model_config import SDEConfig
+from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.base import Simulator, StochasticSurrogate
+from crn_surrogate.simulator.base import StochasticSurrogate
 from crn_surrogate.simulator.state_transform import StateTransform
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import ResolvedProtocol
 
 
-class EulerMaruyamaSolver(Simulator):
+class EulerMaruyamaSolver:
     """Euler-Maruyama integrator for the neural SDE.
 
     X(t+dt) = X(t) + f(X, t) * dt + g(X, t) * sqrt(dt) * Z,  Z ~ N(0, I)
     """
 
     def __init__(
-        self, config: SDEConfig, state_transform: StateTransform | None = None
+        self, config: SolverConfig, state_transform: StateTransform | None = None
     ) -> None:
         """Args:
-        config: SDE configuration (clip_state flag lives here).
+        config: Solver configuration (clip_state flag lives here).
         state_transform: Optional transform applied to state before/after integration.
         """
         self._config = config

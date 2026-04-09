@@ -25,7 +25,8 @@ from crn_surrogate.measurement.config import (
     NoiseMode,
     NoiseSharing,
 )
-from crn_surrogate.simulator.base import Simulator, SurrogateModel
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.base import SurrogateModel
 
 
 @dataclass(frozen=True)
@@ -137,7 +138,7 @@ class BaseExperimentConfig:
 
             return NeuralSDE(config, self.max_n_species).to(device)
 
-    def build_simulator(self) -> Simulator:
+    def build_simulator(self) -> "EulerODESolver | EulerMaruyamaSolver":
         """Instantiate the appropriate solver (ODE or SDE).
 
         Returns:
@@ -146,16 +147,16 @@ class BaseExperimentConfig:
         """
         from crn_surrogate.simulator.state_transform import get_state_transform
 
-        config = self.build_sde_config()
+        solver_config = SolverConfig(clip_state=True)
         transform = get_state_transform(self.use_log1p)
         if self.deterministic:
             from crn_surrogate.simulator.ode_solver import EulerODESolver
 
-            return EulerODESolver(config, state_transform=transform)
+            return EulerODESolver(solver_config, state_transform=transform)
         else:
             from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 
-            return EulerMaruyamaSolver(config, state_transform=transform)
+            return EulerMaruyamaSolver(solver_config, state_transform=transform)
 
     def build_measurement_config(self) -> MeasurementConfig:
         """Build measurement model configuration."""

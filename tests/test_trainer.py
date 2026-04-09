@@ -22,7 +22,9 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.neural_sde import NeuralSDE
+from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.trainer import Trainer
 
 # ── Shared setup ─────────────────────────────────────────────────────────────
@@ -36,8 +38,9 @@ def _small_model():
         sde=SDEConfig.from_crn(crn, d_model=8, d_hidden=16),
     )
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=1)
-    return encoder, sde, model_config, crn
+    sde = NeuralSDE(model_config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
+    return encoder, sde, solver, model_config, crn
 
 
 def _make_dataset(
@@ -76,7 +79,7 @@ def _make_dataset(
 
 def test_trainer_train_losses_has_one_entry_per_epoch(tmp_path):
     """train_losses must contain exactly max_epochs entries after training."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     config = TrainingConfig(
         max_epochs=3,
         batch_size=2,
@@ -85,14 +88,14 @@ def test_trainer_train_losses_has_one_entry_per_epoch(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     result = trainer.train(_make_dataset(crn))
     assert len(result.train_losses) == 3
 
 
 def test_trainer_val_losses_recorded_at_correct_epoch_intervals(tmp_path):
     """val_losses and val_epochs must be recorded exactly at multiples of val_every."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     config = TrainingConfig(
         max_epochs=4,
         batch_size=2,
@@ -102,7 +105,7 @@ def test_trainer_val_losses_recorded_at_correct_epoch_intervals(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     result = trainer.train(
         _make_dataset(crn), val_dataset=_make_dataset(crn, n_items=2)
     )
@@ -112,7 +115,7 @@ def test_trainer_val_losses_recorded_at_correct_epoch_intervals(tmp_path):
 
 def test_trainer_no_val_losses_when_no_val_dataset(tmp_path):
     """When no validation dataset is provided, val_losses and val_epochs stay empty."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     config = TrainingConfig(
         max_epochs=2,
         batch_size=2,
@@ -121,7 +124,7 @@ def test_trainer_no_val_losses_when_no_val_dataset(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     result = trainer.train(_make_dataset(crn))
     assert result.val_losses == []
     assert result.val_epochs == []
@@ -129,7 +132,7 @@ def test_trainer_no_val_losses_when_no_val_dataset(tmp_path):
 
 def test_trainer_all_train_losses_are_finite(tmp_path):
     """Every recorded train loss must be a finite number (no NaN/Inf)."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     config = TrainingConfig(
         max_epochs=3,
         batch_size=2,
@@ -138,7 +141,7 @@ def test_trainer_all_train_losses_are_finite(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     result = trainer.train(_make_dataset(crn))
     for epoch, loss in enumerate(result.train_losses, start=1):
         assert loss == loss and loss < float("inf"), (
@@ -151,7 +154,7 @@ def test_trainer_all_train_losses_are_finite(tmp_path):
 
 def test_trainer_saves_checkpoint_when_val_loss_improves(tmp_path):
     """A .pt checkpoint file must appear under checkpoint_dir after validation."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = str(tmp_path / "ckpt")
     config = TrainingConfig(
         max_epochs=2,
@@ -162,15 +165,15 @@ def test_trainer_saves_checkpoint_when_val_loss_improves(tmp_path):
         checkpoint_dir=ckpt_dir,
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn), val_dataset=_make_dataset(crn, n_items=2))
     checkpoints = [f for f in os.listdir(ckpt_dir) if f.endswith(".pt")]
     assert len(checkpoints) >= 1
 
 
 def test_trainer_checkpoint_contains_expected_keys(tmp_path):
-    """The saved checkpoint dict must contain encoder_state, sde_state, val_loss, epoch."""
-    encoder, sde, model_config, crn = _small_model()
+    """The saved checkpoint dict must contain encoder_state, model_state, val_loss, epoch."""
+    encoder, sde, solver, model_config, crn = _small_model()
     ckpt_dir = str(tmp_path / "ckpt")
     config = TrainingConfig(
         max_epochs=1,
@@ -181,14 +184,14 @@ def test_trainer_checkpoint_contains_expected_keys(tmp_path):
         checkpoint_dir=ckpt_dir,
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn), val_dataset=_make_dataset(crn, n_items=2))
     pt_file = next(f for f in os.listdir(ckpt_dir) if f.endswith(".pt"))
     ckpt = torch.load(os.path.join(ckpt_dir, pt_file), weights_only=False)
     assert {
         "epoch",
         "encoder_state",
-        "sde_state",
+        "model_state",
         "val_loss",
         "optimizer_state",
         "scheduler_state",
@@ -201,7 +204,7 @@ def test_trainer_checkpoint_contains_expected_keys(tmp_path):
 
 def test_trainer_writes_profiler_epoch_csv(tmp_path):
     """Training must produce profiler_epochs.csv in the configured log directory."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     log_dir = str(tmp_path / "logs")
     config = TrainingConfig(
         max_epochs=2,
@@ -211,14 +214,14 @@ def test_trainer_writes_profiler_epoch_csv(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
     assert os.path.exists(os.path.join(log_dir, "profiler_epochs.csv"))
 
 
 def test_trainer_writes_profiler_batch_csv(tmp_path):
     """Training must produce profiler_batches.csv in the configured log directory."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     log_dir = str(tmp_path / "logs")
     config = TrainingConfig(
         max_epochs=2,
@@ -228,14 +231,14 @@ def test_trainer_writes_profiler_batch_csv(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
     assert os.path.exists(os.path.join(log_dir, "profiler_batches.csv"))
 
 
 def test_batch_to_device_moves_tensors_and_passes_through_non_tensors(tmp_path):
     """_batch_to_device moves all tensor values and leaves non-tensors unchanged."""
-    encoder, sde, model_config, _ = _small_model()
+    encoder, sde, solver, model_config, _ = _small_model()
     config = TrainingConfig(
         max_epochs=1,
         batch_size=2,
@@ -244,7 +247,7 @@ def test_batch_to_device_moves_tensors_and_passes_through_non_tensors(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     batch = {
         "stoichiometry": torch.randn(2, 3, 1),
         "species_mask": torch.ones(2, 1, dtype=torch.bool),
@@ -260,7 +263,7 @@ def test_trainer_profiler_batch_csv_contains_forward_and_backward_columns(tmp_pa
     """Each row in profiler_batches.csv must have forward and backward timing columns."""
     import csv as csv_module
 
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     log_dir = str(tmp_path / "logs")
     config = TrainingConfig(
         max_epochs=1,
@@ -270,7 +273,7 @@ def test_trainer_profiler_batch_csv_contains_forward_and_backward_columns(tmp_pa
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     trainer.train(_make_dataset(crn))
 
     with open(os.path.join(log_dir, "profiler_batches.csv")) as f:
@@ -349,7 +352,8 @@ def test_trainer_variable_topology(tmp_path):
         sde=SDEConfig(d_model=8, d_hidden=16, n_noise_channels=4),
     )
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=max_n_species)
+    sde = NeuralSDE(model_config.sde, n_species=max_n_species)
+    solver = EulerMaruyamaSolver(SolverConfig())
 
     config = TrainingConfig(
         max_epochs=1,
@@ -359,7 +363,7 @@ def test_trainer_variable_topology(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     result = trainer.train(train_dataset)
 
     assert len(result.train_losses) == 1

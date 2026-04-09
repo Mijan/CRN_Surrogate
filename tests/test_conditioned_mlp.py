@@ -9,8 +9,8 @@ Covers:
 - ConditionedMLP: TypeError when arguments are passed positionally.
 - FiLMLayer: output shape matches input shape.
 - FiLMLayer: different contexts produce different outputs.
-- CRNNeuralSDE: different contexts produce different drift / diffusion.
-- CRNNeuralSDE: end-to-end gradient from drift output to encoder parameters.
+- NeuralSDE: different contexts produce different drift / diffusion.
+- NeuralSDE: end-to-end gradient from drift output to encoder parameters.
 - SDEConfig: n_hidden_layers validation.
 """
 
@@ -23,7 +23,7 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulator.conditioned_mlp import ConditionedMLP
 from crn_surrogate.simulator.film import FiLMLayer
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.neural_sde import NeuralSDE
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -138,12 +138,12 @@ def test_film_layer_different_contexts_produce_different_outputs():
     )
 
 
-# ── CRNNeuralSDE: context sensitivity ────────────────────────────────────────
+# ── NeuralSDE: context sensitivity ────────────────────────────────────────
 
 
 def test_sde_different_contexts_produce_different_drift():
     """Two different CRN contexts must produce different drift vectors for the same state."""
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=2), n_species=1
     )
     ctx_a = _make_context()
@@ -160,7 +160,7 @@ def test_sde_different_contexts_produce_different_drift():
 
 def test_sde_different_contexts_produce_different_diffusion():
     """Two different CRN contexts must produce different diffusion matrices."""
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=2), n_species=1
     )
     ctx_a = _make_context()
@@ -175,14 +175,14 @@ def test_sde_different_contexts_produce_different_diffusion():
     )
 
 
-# ── CRNNeuralSDE: end-to-end gradient ────────────────────────────────────────
+# ── NeuralSDE: end-to-end gradient ────────────────────────────────────────
 
 
 def test_sde_drift_gradients_flow_to_encoder_parameters():
     """A loss on drift output must propagate gradients back through the encoder."""
     d_model = 16
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=d_model, n_layers=1))
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=d_model, d_hidden=32, n_noise_channels=2), n_species=1
     )
 

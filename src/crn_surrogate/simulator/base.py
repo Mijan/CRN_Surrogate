@@ -1,4 +1,4 @@
-"""Abstract base classes for surrogate models and simulators."""
+"""Abstract base classes for surrogate models."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 import torch
 
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
-from crn_surrogate.simulation.trajectory import Trajectory
 
 
 class SurrogateModel(ABC, torch.nn.Module):
@@ -73,21 +72,4 @@ class StochasticSurrogate(SurrogateModel, ABC):
         protocol_embedding: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute diffusion from a pre-extracted context vector."""
-        ...
-
-
-class Simulator(ABC):
-    """Abstract simulator that integrates a surrogate model forward in time."""
-
-    @abstractmethod
-    def solve(
-        self,
-        model: SurrogateModel,
-        initial_state: torch.Tensor,
-        crn_context: CRNContext,
-        t_span: torch.Tensor,
-        dt: float,
-        resolved_protocol=None,
-    ) -> Trajectory:
-        """Integrate the model forward, recording states at t_span."""
         ...

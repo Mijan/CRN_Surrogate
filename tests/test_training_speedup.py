@@ -16,7 +16,9 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.neural_sde import NeuralSDE
+from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.trainer import Trainer
 
 # ── Shared setup ──────────────────────────────────────────────────────────────
@@ -30,8 +32,9 @@ def _small_model():
         sde=SDEConfig.from_crn(crn, d_model=8, d_hidden=16),
     )
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=1)
-    return encoder, sde, model_config, crn
+    sde = NeuralSDE(model_config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
+    return encoder, sde, solver, model_config, crn
 
 
 def _make_dataset(
@@ -67,7 +70,8 @@ def _make_dataset(
 
 def _make_trainer(crn, model_config, tmp_path) -> Trainer:
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=1)
+    sde = NeuralSDE(model_config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
     config = TrainingConfig(
         max_epochs=1,
         batch_size=2,
@@ -77,7 +81,7 @@ def _make_trainer(crn, model_config, tmp_path) -> Trainer:
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    return Trainer(encoder, sde, model_config, config)
+    return Trainer(encoder, sde, model_config, config, simulator=solver)
 
 
 # ── _validate compute_rollout tests ──────────────────────────────────────────
@@ -85,7 +89,7 @@ def _make_trainer(crn, model_config, tmp_path) -> Trainer:
 
 def test_validate_without_rollout_returns_zero_rollout_loss(tmp_path):
     """compute_rollout=False returns 0.0 for rollout loss and a finite NLL."""
-    _, _, model_config, crn = _small_model()
+    _, _, _, model_config, crn = _small_model()
     trainer = _make_trainer(crn, model_config, tmp_path)
     val_dataset = _make_dataset(crn, n_items=2)
 
@@ -98,7 +102,7 @@ def test_validate_without_rollout_returns_zero_rollout_loss(tmp_path):
 
 def test_validate_with_rollout_returns_nonzero_rollout_loss(tmp_path):
     """compute_rollout=True returns a nonzero finite rollout loss."""
-    _, _, model_config, crn = _small_model()
+    _, _, _, model_config, crn = _small_model()
     trainer = _make_trainer(crn, model_config, tmp_path)
     val_dataset = _make_dataset(crn, n_items=2)
 

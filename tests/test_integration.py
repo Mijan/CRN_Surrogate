@@ -16,7 +16,8 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.neural_sde import NeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.losses import MeanMatchingLoss
 from crn_surrogate.training.trainer import Trainer
@@ -31,8 +32,8 @@ def test_end_to_end_birth_death_trajectory_shape_and_metadata():
         sde=SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4),
     )
     encoder = BipartiteGNNEncoder(config.encoder)
-    sde = CRNNeuralSDE(config.sde, n_species=1)
-    solver = EulerMaruyamaSolver(config.sde)
+    sde = NeuralSDE(config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
     crn = birth_death()
     crn_repr = crn_to_tensor_repr(crn)
     t_span = torch.linspace(0, 5, 10)
@@ -52,8 +53,8 @@ def test_end_to_end_lotka_volterra_trajectory_shape():
         sde=SDEConfig(d_model=32, d_hidden=64, n_noise_channels=8),
     )
     encoder = BipartiteGNNEncoder(config.encoder)
-    sde = CRNNeuralSDE(config.sde, n_species=2)
-    solver = EulerMaruyamaSolver(config.sde)
+    sde = NeuralSDE(config.sde, n_species=2)
+    solver = EulerMaruyamaSolver(SolverConfig())
     crn = lotka_volterra()
     crn_repr = crn_to_tensor_repr(crn)
     t_span = torch.linspace(0, 10, 20)
@@ -74,8 +75,8 @@ def test_gradient_flows_from_loss_through_sde_to_encoder():
         sde=SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4),
     )
     encoder = BipartiteGNNEncoder(config.encoder)
-    sde = CRNNeuralSDE(config.sde, n_species=1)
-    solver = EulerMaruyamaSolver(config.sde)
+    sde = NeuralSDE(config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
     crn = birth_death()
     crn_repr = crn_to_tensor_repr(crn)
     t_span = torch.linspace(0, 2, 5)
@@ -134,7 +135,8 @@ def test_trainer_completes_and_returns_valid_training_result(tmp_path):
         sde=SDEConfig.from_crn(crn, d_model=8, d_hidden=16),
     )
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=1)
+    sde = NeuralSDE(model_config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
     train_config = TrainingConfig(
         max_epochs=4,
         batch_size=2,
@@ -145,7 +147,7 @@ def test_trainer_completes_and_returns_valid_training_result(tmp_path):
         scheduler_type=SchedulerType.COSINE,
     )
 
-    result = Trainer(encoder, sde, model_config, train_config).train(
+    result = Trainer(encoder, sde, model_config, train_config, simulator=solver).train(
         _tiny_dataset(crn), val_dataset=_tiny_dataset(crn, n_items=2)
     )
 

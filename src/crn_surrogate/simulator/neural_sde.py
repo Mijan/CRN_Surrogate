@@ -171,7 +171,3 @@ class NeuralSDE(NeuralDrift, StochasticSurrogate):
         return raw.view(x.shape[0], self._n_species, n_noise)
 
 
-# Backward compatibility alias: old checkpoints use CRNNeuralSDE as the class
-# name in serialized configs but state dict keys (_drift_net.*, _diff_net.*) are
-# what actually matter for loading. NeuralSDE has identical keys.
-CRNNeuralSDE = NeuralSDE

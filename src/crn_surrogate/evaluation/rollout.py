@@ -1,19 +1,17 @@
-"""Generate SDE rollouts from a trained encoder + SDE pair."""
+"""Generate SDE rollouts from a trained encoder + model pair."""
 
 from __future__ import annotations
 
 import torch
 
-from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.base import StochasticSurrogate
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
-from crn_surrogate.simulator.state_transform import get_state_transform
 
 
 class ModelEvaluator:
-    """Generate SDE rollouts from a trained encoder + SDE pair.
+    """Generate SDE rollouts from a trained encoder + model pair.
 
     Encodes the CRN context once per call to rollout() and runs K
     independent Euler-Maruyama trajectories.
@@ -22,18 +20,17 @@ class ModelEvaluator:
     def __init__(
         self,
         encoder: BipartiteGNNEncoder,
-        sde: CRNNeuralSDE,
-        sde_config: SDEConfig,
+        sde: StochasticSurrogate,
+        solver: EulerMaruyamaSolver,
     ) -> None:
         """Args:
         encoder: Trained bipartite GNN encoder.
-        sde: Trained neural SDE.
-        sde_config: SDE configuration (used to build the solver).
+        sde: Trained stochastic surrogate model.
+        solver: Configured Euler-Maruyama solver (state transform baked in).
         """
         self._encoder = encoder
         self._sde = sde
-        state_transform = get_state_transform(sde_config.use_log1p)
-        self._solver = EulerMaruyamaSolver(sde_config, state_transform=state_transform)
+        self._solver = solver
 
     def rollout(
         self,

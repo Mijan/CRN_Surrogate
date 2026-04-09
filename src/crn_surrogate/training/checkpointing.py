@@ -133,7 +133,7 @@ class CheckpointManager:
             The epoch to resume from (checkpoint["epoch"] + 1).
         """
         encoder.load_state_dict(checkpoint["encoder_state"])
-        model.load_state_dict(checkpoint["sde_state"])
+        model.load_state_dict(checkpoint["model_state"])
 
         if "optimizer_state" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -141,6 +141,7 @@ class CheckpointManager:
             scheduler.load_state_dict(checkpoint["scheduler_state"])
         if "best_val_loss" in checkpoint:
             self._best_val_loss = checkpoint["best_val_loss"]
+
 
         epoch = checkpoint.get("epoch", 0)
         print(f"Resumed from epoch {epoch} (best_val_loss={self._best_val_loss:.4f})")

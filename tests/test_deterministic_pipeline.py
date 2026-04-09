@@ -73,6 +73,7 @@ class TestDeterministicSolver:
         from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
         from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
         from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
+        from crn_surrogate.configs.solver_config import SolverConfig
         from crn_surrogate.simulator.ode_solver import EulerODESolver
         from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 
@@ -91,8 +92,8 @@ class TestDeterministicSolver:
         drift_model = NeuralDrift(sde_config, n_species=crn.n_species)
         sde_model = NeuralSDE(sde_config, n_species=crn.n_species)
 
-        ode_solver = EulerODESolver(sde_config)
-        stoch_solver = EulerMaruyamaSolver(sde_config)
+        ode_solver = EulerODESolver(SolverConfig())
+        stoch_solver = EulerMaruyamaSolver(SolverConfig())
 
         t_span = torch.linspace(0.0, 5.0, 20)
         initial_state = torch.tensor([5.0])

@@ -18,7 +18,7 @@ from crn_surrogate.configs.training_config import (
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.measurement.direct import DirectObservation
-from crn_surrogate.simulator.base import Simulator, StochasticSurrogate, SurrogateModel
+from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.simulator.state_transform import StateTransform
@@ -90,17 +90,18 @@ class Trainer:
         model: SurrogateModel,
         model_config: ModelConfig,
         train_config: TrainingConfig,
-        simulator: Simulator | None = None,
+        simulator: EulerMaruyamaSolver | EulerODESolver,
         loss_fn: TrajectoryLoss | None = None,
     ) -> None:
         """Args:
         encoder: The bipartite GNN encoder.
         model: The surrogate model (NeuralDrift or NeuralSDE).
-        model_config: Model hyperparameters.
+        model_config: Pipeline configuration covering encoder, SDE architecture,
+            and measurement model. Does NOT configure the surrogate model
+            directly — use the model argument for that.
         train_config: Training hyperparameters.
-        simulator: Optional solver for rollout validation. When None, a solver
-            is automatically selected based on the model type (EulerMaruyama
-            for stochastic models, EulerODE for deterministic models).
+        simulator: Solver for rollout validation and scheduled-sampling training.
+            Use BaseExperimentConfig.build_simulator() to construct one.
         loss_fn: Rollout loss function. Defaults to CombinedTrajectoryLoss.
             Only used when training_mode is FULL_ROLLOUT or SCHEDULED_SAMPLING.
         """
@@ -111,19 +112,8 @@ class Trainer:
         self._rollout_loss = (
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
-        # Default to identity transform; callers using log1p should pass simulator
-        # constructed with the appropriate StateTransform via build_simulator().
         self._state_transform: StateTransform = StateTransform()
-        if simulator is not None:
-            self._solver: Simulator = simulator
-        elif isinstance(model, StochasticSurrogate):
-            self._solver = EulerMaruyamaSolver(
-                model_config.sde, state_transform=self._state_transform
-            )
-        else:
-            self._solver = EulerODESolver(
-                model_config.sde, state_transform=self._state_transform
-            )
+        self._solver: EulerMaruyamaSolver | EulerODESolver = simulator
 
         self._device = next(encoder.parameters(), torch.zeros(1)).device
 
@@ -308,7 +298,7 @@ class Trainer:
         state = {
             "epoch": epoch,
             "encoder_state": self._encoder.state_dict(),
-            "sde_state": self._model.state_dict(),
+            "model_state": self._model.state_dict(),
             "optimizer_state": self._optimizer.state_dict(),
             "scheduler_state": self._scheduler.state_dict(),
             "best_val_loss": self._checkpoint_mgr.best_val_loss,

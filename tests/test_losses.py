@@ -7,7 +7,7 @@ import torch
 
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.neural_sde import NeuralSDE
 from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
     GaussianTransitionNLL,
@@ -191,7 +191,7 @@ D_MODEL = 16
 
 @pytest.fixture()
 def sde_and_ctx():
-    """Minimal CRNNeuralSDE + CRNContext for NLL tests."""
+    """Minimal NeuralSDE + CRNContext for NLL tests."""
     torch.manual_seed(0)
     cfg = SDEConfig(
         d_model=D_MODEL,
@@ -200,7 +200,7 @@ def sde_and_ctx():
         n_hidden_layers=1,
         clip_state=False,
     )
-    sde = CRNNeuralSDE(cfg, n_species=N_SPECIES)
+    sde = NeuralSDE(cfg, n_species=N_SPECIES)
     ctx = CRNContext(
         species_embeddings=torch.randn(N_SPECIES, D_MODEL),
         reaction_embeddings=torch.randn(N_SPECIES, D_MODEL),
@@ -269,7 +269,7 @@ def test_gaussian_nll_gradient_flows(sde_and_ctx):
 
 
 def _nll_reference_loop(
-    sde: CRNNeuralSDE,
+    sde: NeuralSDE,
     ctx: CRNContext,
     traj: torch.Tensor,
     times: torch.Tensor,
@@ -353,7 +353,7 @@ def _make_nll_sde_and_ctx(n_species: int = 2, d_protocol: int = 0):
     enc = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=1))
     crn_repr = crn_to_tensor_repr(crn)
     ctx = enc(crn_repr)
-    sde = CRNNeuralSDE(
+    sde = NeuralSDE(
         SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4, d_protocol=d_protocol),
         n_species=n_species,
     )

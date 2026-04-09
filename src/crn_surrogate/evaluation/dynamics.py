@@ -10,7 +10,7 @@ import torch
 
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.encoder.tensor_repr import CRNTensorRepr
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.base import StochasticSurrogate
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class DynamicsVisualizer:
     def __init__(
         self,
         encoder: BipartiteGNNEncoder,
-        sde: CRNNeuralSDE,
+        sde: StochasticSurrogate,
         crn_repr: CRNTensorRepr,
         initial_state: torch.Tensor,
     ) -> None:

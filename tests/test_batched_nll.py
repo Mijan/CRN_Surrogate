@@ -22,7 +22,9 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.neural_sde import NeuralSDE
+from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.trainer import Trainer
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -32,7 +34,7 @@ def _make_sde_and_encoder(d_model: int = 16, n_species: int = 3):
     enc_cfg = EncoderConfig(d_model=d_model, n_layers=1)
     sde_cfg = SDEConfig(d_model=d_model, d_hidden=32, n_noise_channels=4)
     encoder = BipartiteGNNEncoder(enc_cfg)
-    sde = CRNNeuralSDE(sde_cfg, n_species=n_species)
+    sde = NeuralSDE(sde_cfg, n_species=n_species)
     return encoder, sde, enc_cfg, sde_cfg
 
 
@@ -107,7 +109,7 @@ def _make_trainer(encoder, sde, enc_cfg, sde_cfg, tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    return Trainer(encoder, sde, model_config, config)
+    return Trainer(encoder, sde, model_config, config, simulator=EulerMaruyamaSolver(SolverConfig()))
 
 
 # ── drift_from_context / diffusion_from_context ───────────────────────────────

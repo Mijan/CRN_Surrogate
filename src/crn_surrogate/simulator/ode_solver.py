@@ -1,7 +1,7 @@
 """Euler ODE solver for deterministic integration of the neural drift network.
 
 Uses the same interface as EulerMaruyamaSolver but suppresses the diffusion
-term entirely — no ``sde.diffusion()`` call, no noise sampling. Intended for
+term entirely — no ``model.diffusion()`` call, no noise sampling. Intended for
 deterministic proof-of-concept runs where data was generated via ODE integration
 and stochasticity is not desired at inference time.
 """
@@ -12,17 +12,17 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from crn_surrogate.configs.model_config import SDEConfig
+from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.base import Simulator, SurrogateModel
+from crn_surrogate.simulator.base import SurrogateModel
 from crn_surrogate.simulator.state_transform import StateTransform
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import ResolvedProtocol
 
 
-class EulerODESolver(Simulator):
+class EulerODESolver:
     """Pure Euler (ODE) integrator for the neural drift network.
 
     X(t+dt) = X(t) + f(X, t) * dt
@@ -32,10 +32,10 @@ class EulerODESolver(Simulator):
     """
 
     def __init__(
-        self, config: SDEConfig, state_transform: StateTransform | None = None
+        self, config: SolverConfig, state_transform: StateTransform | None = None
     ) -> None:
         """Args:
-        config: SDE configuration (clip_state flag lives here).
+        config: Solver configuration (clip_state flag lives here).
         state_transform: Optional transform applied to state before/after integration.
         """
         self._config = config

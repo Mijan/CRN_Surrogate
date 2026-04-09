@@ -21,7 +21,9 @@ from crn_surrogate.encoder.graph_utils import merge_bipartite_edges
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.neural_sde import NeuralSDE
+from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.trainer import Trainer
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -68,7 +70,7 @@ def _make_trainer(tmp_path, n_species: int = 3) -> tuple[Trainer, CRNTrajectoryD
     sde_cfg = SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4)
     model_config = ModelConfig(encoder=enc_cfg, sde=sde_cfg)
     encoder = BipartiteGNNEncoder(enc_cfg)
-    sde = CRNNeuralSDE(sde_cfg, n_species=n_species)
+    sde = NeuralSDE(sde_cfg, n_species=n_species)
     config = TrainingConfig(
         max_epochs=1,
         batch_size=4,
@@ -77,7 +79,7 @@ def _make_trainer(tmp_path, n_species: int = 3) -> tuple[Trainer, CRNTrajectoryD
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=EulerMaruyamaSolver(SolverConfig()))
 
     ssa = GillespieSSA()
     time_grid = torch.linspace(0.0, 5.0, 8)

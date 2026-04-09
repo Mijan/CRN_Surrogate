@@ -17,7 +17,9 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.configs.solver_config import SolverConfig
+from crn_surrogate.simulator.neural_sde import NeuralSDE
+from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.trainer import Trainer
 
 # ── Shared setup ──────────────────────────────────────────────────────────────
@@ -31,8 +33,9 @@ def _small_model():
         sde=SDEConfig.from_crn(crn, d_model=8, d_hidden=16),
     )
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=1)
-    return encoder, sde, model_config, crn
+    sde = NeuralSDE(model_config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
+    return encoder, sde, solver, model_config, crn
 
 
 def _make_dataset(
@@ -68,7 +71,8 @@ def _make_dataset(
 
 def _make_trainer(crn, model_config, tmp_path, max_epochs: int = 2, val_every: int = 1):
     encoder = BipartiteGNNEncoder(model_config.encoder)
-    sde = CRNNeuralSDE(model_config.sde, n_species=1)
+    sde = NeuralSDE(model_config.sde, n_species=1)
+    solver = EulerMaruyamaSolver(SolverConfig())
     config = TrainingConfig(
         max_epochs=max_epochs,
         batch_size=2,
@@ -78,7 +82,7 @@ def _make_trainer(crn, model_config, tmp_path, max_epochs: int = 2, val_every: i
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    return Trainer(encoder, sde, model_config, config), encoder, sde
+    return Trainer(encoder, sde, model_config, config, simulator=solver), encoder, sde
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -86,7 +90,7 @@ def _make_trainer(crn, model_config, tmp_path, max_epochs: int = 2, val_every: i
 
 def test_checkpoint_contains_optimizer_state(tmp_path):
     """Checkpoint includes optimizer_state, scheduler_state, best_val_loss, epoch."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     config = TrainingConfig(
         max_epochs=2,
         batch_size=2,
@@ -96,7 +100,7 @@ def test_checkpoint_contains_optimizer_state(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     dataset = _make_dataset(crn)
     trainer.train(dataset, val_dataset=_make_dataset(crn, n_items=2))
 
@@ -109,12 +113,12 @@ def test_checkpoint_contains_optimizer_state(tmp_path):
     assert "best_val_loss" in ckpt
     assert "epoch" in ckpt
     assert "encoder_state" in ckpt
-    assert "sde_state" in ckpt
+    assert "model_state" in ckpt
 
 
 def test_load_checkpoint_restores_optimizer(tmp_path):
     """After load_checkpoint, optimizer state_dict matches the saved state."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     config = TrainingConfig(
         max_epochs=2,
         batch_size=2,
@@ -124,7 +128,7 @@ def test_load_checkpoint_restores_optimizer(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     dataset = _make_dataset(crn)
     trainer.train(dataset, val_dataset=_make_dataset(crn, n_items=2))
 
@@ -145,8 +149,9 @@ def test_load_checkpoint_restores_optimizer(tmp_path):
         scheduler_type=SchedulerType.COSINE,
     )
     encoder2 = BipartiteGNNEncoder(model_config.encoder)
-    sde2 = CRNNeuralSDE(model_config.sde, n_species=1)
-    trainer2 = Trainer(encoder2, sde2, model_config, config2)
+    sde2 = NeuralSDE(model_config.sde, n_species=1)
+    solver2 = EulerMaruyamaSolver(SolverConfig())
+    trainer2 = Trainer(encoder2, sde2, model_config, config2, simulator=solver2)
     trainer2.load_checkpoint(ckpt)
 
     # Verify optimizer state matches
@@ -157,7 +162,7 @@ def test_load_checkpoint_restores_optimizer(tmp_path):
 
 def test_resume_continues_from_correct_epoch(tmp_path):
     """Training resumes from checkpoint epoch + 1 and result has correct length."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     # Train 2 epochs to create a checkpoint
     config = TrainingConfig(
         max_epochs=2,
@@ -168,7 +173,7 @@ def test_resume_continues_from_correct_epoch(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     dataset = _make_dataset(crn)
     trainer.train(dataset, val_dataset=_make_dataset(crn, n_items=2))
 
@@ -187,8 +192,9 @@ def test_resume_continues_from_correct_epoch(tmp_path):
         scheduler_type=SchedulerType.COSINE,
     )
     encoder2 = BipartiteGNNEncoder(model_config.encoder)
-    sde2 = CRNNeuralSDE(model_config.sde, n_species=1)
-    trainer2 = Trainer(encoder2, sde2, model_config, config2)
+    sde2 = NeuralSDE(model_config.sde, n_species=1)
+    solver2 = EulerMaruyamaSolver(SolverConfig())
+    trainer2 = Trainer(encoder2, sde2, model_config, config2, simulator=solver2)
     start_epoch = trainer2.load_checkpoint(ckpt)
 
     result = trainer2.train(
@@ -203,7 +209,7 @@ def test_resume_continues_from_correct_epoch(tmp_path):
 
 def test_train_start_epoch_skips_earlier_epochs(tmp_path):
     """start_epoch=3 with max_epochs=5 runs exactly 3 epochs (3, 4, 5)."""
-    encoder, sde, model_config, crn = _small_model()
+    encoder, sde, solver, model_config, crn = _small_model()
     config = TrainingConfig(
         max_epochs=5,
         batch_size=2,
@@ -212,6 +218,6 @@ def test_train_start_epoch_skips_earlier_epochs(tmp_path):
         checkpoint_dir=str(tmp_path / "ckpt"),
         scheduler_type=SchedulerType.COSINE,
     )
-    trainer = Trainer(encoder, sde, model_config, config)
+    trainer = Trainer(encoder, sde, model_config, config, simulator=solver)
     result = trainer.train(_make_dataset(crn), start_epoch=3)
     assert len(result.train_losses) == 3

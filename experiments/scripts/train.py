@@ -247,7 +247,7 @@ def main() -> None:
         checkpoint = _resolve_checkpoint(args.resume_weights_only, cfg, device, use_wandb)
         if checkpoint is not None:
             encoder.load_state_dict(checkpoint["encoder_state"])
-            model.load_state_dict(checkpoint["sde_state"])
+            model.load_state_dict(checkpoint["model_state"])
             start_epoch = checkpoint.get("epoch", 0) + 1
             print(f"Loaded model weights from checkpoint. Starting fresh training from epoch {start_epoch} with config LR={train_config.lr}, scheduler={train_config.scheduler_type}")
         else:
@@ -271,7 +271,7 @@ def main() -> None:
         torch.save(
             {
                 "encoder_state": encoder.state_dict(),
-                "sde_state": model.state_dict(),
+                "model_state": model.state_dict(),
                 "config": cfg.to_dict(),
                 "train_losses": result.train_losses,
                 "val_losses": result.val_losses,
