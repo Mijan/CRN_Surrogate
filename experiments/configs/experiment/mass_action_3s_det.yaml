@@ -23,5 +23,5 @@ model:
 
 measurement:
   noise_mode: fixed
-  noise_init_eps: 0.1
+  noise_init_eps: 5
   min_variance: 1.0e-2

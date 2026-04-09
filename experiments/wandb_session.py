@@ -88,17 +88,7 @@ class WandbSession:
             file_path: Path to the file to upload.
             metadata: Optional metadata dict.
         """
-        if self._run is None:
-            return
-        import wandb
-
-        artifact = wandb.Artifact(
-            name=name,
-            type=artifact_type,
-            metadata=metadata or {},
-        )
-        artifact.add_file(str(file_path))
-        self._run.log_artifact(artifact)
+        self.log_multi_file_artifact(name, artifact_type, [file_path], metadata)
 
     def log_multi_file_artifact(
         self,
@@ -119,22 +109,7 @@ class WandbSession:
             return
         import wandb
 
-        artifact = wandb.Artifact(
-            name=name, type=artifact_type, metadata=metadata or {}
-        )
+        artifact = wandb.Artifact(name=name, type=artifact_type, metadata=metadata or {})
         for fp in file_paths:
             artifact.add_file(str(fp))
         self._run.log_artifact(artifact)
-
-    def use_artifact(self, artifact_ref: str):
-        """Declare artifact usage for lineage tracking.
-
-        Args:
-            artifact_ref: W&B artifact reference string.
-
-        Returns:
-            W&B artifact object, or None if no run is active.
-        """
-        if self._run is not None:
-            return self._run.use_artifact(artifact_ref)
-        return None

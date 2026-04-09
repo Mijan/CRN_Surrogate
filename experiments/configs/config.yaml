@@ -23,6 +23,8 @@ generation:
   n_init_conditions: 1
   use_fast_ssa: true
   use_ode_prescreen: true
+  resume_train: null
+  resume_val: null
 
 # Training run
 run:

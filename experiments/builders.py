@@ -59,19 +59,7 @@ def build_sde_config(cfg: DictConfig) -> SDEConfig:
     )
 
 
-def build_solver_config(cfg: DictConfig) -> SolverConfig:
-    """Build SolverConfig from Hydra config.
-
-    Args:
-        cfg: Fully resolved Hydra config.
-
-    Returns:
-        SolverConfig instance.
-    """
-    return SolverConfig(clip_state=cfg.solver.clip_state)
-
-
-def build_measurement_config(cfg: DictConfig) -> MeasurementConfig:
+def _build_measurement_config(cfg: DictConfig) -> MeasurementConfig:
     """Build MeasurementConfig from Hydra config.
 
     Args:
@@ -105,7 +93,7 @@ def build_model_config(cfg: DictConfig) -> ModelConfig:
     return ModelConfig(
         encoder=build_encoder_config(cfg),
         sde=build_sde_config(cfg),
-        measurement=build_measurement_config(cfg),
+        measurement=_build_measurement_config(cfg),
     )
 
 
@@ -175,7 +163,7 @@ def build_simulator(cfg: DictConfig):
     """
     from crn_surrogate.simulator.state_transform import get_state_transform
 
-    solver_config = build_solver_config(cfg)
+    solver_config = SolverConfig(clip_state=cfg.solver.clip_state)
     transform = get_state_transform(cfg.solver.use_log1p)
     if cfg.solver.deterministic:
         from crn_surrogate.simulator.ode_solver import EulerODESolver
