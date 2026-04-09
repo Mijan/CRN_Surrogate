@@ -382,24 +382,98 @@ validation and optional fine-tuning, not as the primary training signal.
 
 ## Testing
 
-- Write unit tests by default for every module. Place them in a parallel
-  `tests/` directory mirroring the source structure.
+### Structure
+
+Tests mirror the source tree exactly:
+
+```
+tests/
+  simulation/       # mirrors src/crn_surrogate/simulation/
+  crn/              # mirrors src/crn_surrogate/crn/
+  configs/          # mirrors src/crn_surrogate/configs/
+  encoder/          # mirrors src/crn_surrogate/encoder/
+  simulator/        # mirrors src/crn_surrogate/simulator/
+  measurement/      # mirrors src/crn_surrogate/measurement/
+  training/         # mirrors src/crn_surrogate/training/
+  data/             # mirrors src/crn_surrogate/data/
+    generation/     # mirrors src/crn_surrogate/data/generation/
+  experiments/      # mirrors experiments/ (builders, infrastructure)
+```
+
+Each source file `src/crn_surrogate/foo/bar.py` has a corresponding
+`tests/foo/test_bar.py`. Every test directory has an `__init__.py`.
+
+### Philosophy
+
+- **Test external interfaces, not internal behavior.** If a method is
+  private (`_`-prefixed), test it through the public method that calls it.
+- **Tests should explain why they exist.** Anyone reading a test should
+  understand what contract it verifies. Use descriptive test names like
+  `test_birth_death_stationary_mean_matches_analytical`.
+- **Use analytical references for numerical tests.** Prefer testing SSA
+  against known stationary distributions (birth-death mean = k_birth/k_death)
+  and ODE against analytical solutions (exponential decay) rather than
+  cross-implementation comparisons.
+- **Statistical tests use wide tolerances.** SSA convergence tests should
+  use M >= 200 samples and tolerance >= 1.0 to keep flaky failure rate
+  below 1%.
+- **Do not test trivial behavior.** Dataclass field defaults, enum string
+  values, and `__repr__` methods do not need tests. Only test validation
+  logic (e.g., `__post_init__` that raises on invalid inputs).
+
+### Fixtures and Stubs
+
+- `tests/simulation/conftest.py` provides `StubCRN` objects that satisfy
+  the interface (stoichiometry_matrix + evaluate_propensities) without
+  importing the full CRN module. Use these for simulation tests.
+- `tests/encoder/conftest.py` provides real CRN objects and their
+  `CRNTensorRepr` (needed because `crn_to_tensor_repr` inspects propensity
+  internals). Also provides small `EncoderConfig` fixtures.
+- `tests/simulator/conftest.py` provides `make_fake_context(d_model)` to
+  build CRNContext with random tensors. Simulator tests should NOT depend
+  on the encoder being correct.
+- Builder tests (`tests/experiments/test_builders.py`) use
+  `OmegaConf.create()` to build configs directly, avoiding Hydra's
+  GlobalHydra singleton issues in tests.
+
+### Conventions
+
 - Use `pytest`. No unittest-style classes unless grouping is genuinely
   needed.
-- Test names should describe the behavior being verified, e.g.,
-  `test_birth_death_stationary_mean_matches_analytical`.
-- Test one behavior per test function. Multiple assertions are fine if they
-  verify aspects of the same behavior.
 - Use `pytest.fixture` for shared setup. Prefer factory fixtures over
   mutable shared state.
 - Use `pytest.mark.parametrize` for testing the same logic across multiple
   inputs.
 - Use `pytest.approx` or `torch.testing.assert_close` for numerical
   comparisons. Specify tolerances explicitly.
-- Aim for fast tests. If a test needs GPU or takes >5 seconds, mark it with
-  `@pytest.mark.slow`.
-- Add an integration test that verifies the end-to-end pipeline (data in,
-  result out, gradients flow).
+- Mark numba-dependent tests with
+  `@pytest.mark.skipif(not NUMBA_AVAILABLE, reason="numba not installed")`.
+- All tests must be fast (<5 seconds each). For solver/trainer tests, use
+  tiny configs (d_model=16, d_hidden=32) and short trajectories (T=5, dt=0.5).
+- All tests run on CPU only.
+- Never test with `use_wandb=True`. All W&B integration is tested manually.
+
+### What to prioritize when writing new tests
+
+1. **Simulation correctness** (ground-truth generators corrupt all training
+   data if wrong).
+2. **Loss function numerics** (subtle sign/normalization bugs are silent and
+   devastating).
+3. **Encoder contracts** (same CRN = same context, different CRN = different
+   context, batch matches sequential).
+4. **Type hierarchy contracts** (NeuralDrift is SurrogateModel but not
+   StochasticSurrogate; EulerODESolver works with NeuralDrift).
+5. **Builder correctness** (config string-to-enum mapping, deterministic flag
+   dispatches to correct model/solver class).
+6. **Collator padding** (padding bugs are silent and produce wrong gradients).
+
+### What to skip
+
+- Individual motif factory kinetics (covered by propensity tests).
+- `__repr__` methods.
+- Dataclass field defaults (unless validation logic exists).
+- Full training loop integration (too slow for unit tests).
+- W&B artifact logging (requires external service).
 
 ---
 
