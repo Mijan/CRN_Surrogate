@@ -1,10 +1,10 @@
 # @package _global_
 defaults:
-  - /model: large
-  - /training: long
-  - /dataset: mass_action_3s_large
-  - /solver: stochastic
-  - /measurement: default
+  - override /model: large
+  - override /training: long
+  - override /dataset: mass_action_3s_large
+  - override /solver: stochastic
+  - override /measurement: default
 
 experiment_name: mass_action_3s_v8
 wandb_group: mass-action-3s
