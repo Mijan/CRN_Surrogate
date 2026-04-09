@@ -1,23 +1,22 @@
-"""Neural SDE whose drift and diffusion are conditioned on CRN embeddings."""
+"""Neural surrogate models: drift-only (NeuralDrift) and full SDE (NeuralSDE)."""
 
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
+from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
 from crn_surrogate.simulator.conditioned_mlp import ConditionedMLP
 
 
-class CRNNeuralSDE(nn.Module):
-    """Neural SDE whose drift and diffusion are conditioned on CRN embeddings.
+class NeuralDrift(SurrogateModel):
+    """Drift-only surrogate (no diffusion network allocated).
 
-    Mirrors the Chemical Langevin Equation structure:
-      dX = f(X, t; ctx) dt + g(X, t; ctx) dW
-    where f and g are ConditionedMLPs that apply FiLM modulation at every
-    hidden layer using the CRN encoder output as context.
+    Implements the deterministic component:
+      dX/dt = f(X, t; ctx)
+    where f is a ConditionedMLP with FiLM modulation at every hidden layer.
     """
 
     def __init__(self, config: SDEConfig, n_species: int) -> None:
@@ -28,9 +27,7 @@ class CRNNeuralSDE(nn.Module):
         super().__init__()
         self._config = config
         self._n_species = n_species
-        # context = CRN pool (2 * d_model) + optional protocol embedding (d_protocol)
         d_context = 2 * config.d_model + config.d_protocol
-
         self._drift_net = ConditionedMLP(
             d_in=n_species,
             d_hidden=config.d_hidden,
@@ -39,18 +36,10 @@ class CRNNeuralSDE(nn.Module):
             n_hidden_layers=config.n_hidden_layers,
             dropout=config.mlp_dropout,
         )
-        self._diff_net = ConditionedMLP(
-            d_in=n_species,
-            d_hidden=config.d_hidden,
-            d_out=n_species * config.n_noise_channels,
-            d_context=d_context,
-            n_hidden_layers=config.n_hidden_layers,
-            dropout=config.mlp_dropout,
-        )
 
     @property
     def n_species(self) -> int:
-        """State dimension the SDE was constructed for."""
+        """State dimension the model was constructed for."""
         return self._n_species
 
     def drift(
@@ -66,39 +55,12 @@ class CRNNeuralSDE(nn.Module):
             t: Scalar time tensor.
             state: (n_species,) or (B, n_species) current state.
             crn_context: CRN encoder output.
-            protocol_embedding: Optional (d_protocol,) or (B, d_protocol) tensor
-                from ProtocolEncoder. When provided, concatenated to the CRN
-                context vector before conditioning.
+            protocol_embedding: Optional (d_protocol,) or (B, d_protocol) tensor.
 
         Returns:
             (n_species,) or (B, n_species) drift vector.
         """
         return self.drift_from_context(
-            t, state, crn_context.context_vector, protocol_embedding
-        )
-
-    def diffusion(
-        self,
-        t: torch.Tensor,
-        state: torch.Tensor,
-        crn_context: CRNContext,
-        protocol_embedding: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Compute diffusion coefficient g(X, t; CRN embedding [; protocol embedding]).
-
-        Args:
-            t: Scalar time tensor.
-            state: (n_species,) or (B, n_species) current state.
-            crn_context: CRN encoder output.
-            protocol_embedding: Optional (d_protocol,) or (B, d_protocol) tensor
-                from ProtocolEncoder. When provided, concatenated to the CRN
-                context vector before conditioning.
-
-        Returns:
-            (n_species, n_noise_channels) or (B, n_species, n_noise_channels),
-            non-negative (softplus applied).
-        """
-        return self.diffusion_from_context(
             t, state, crn_context.context_vector, protocol_embedding
         )
 
@@ -131,6 +93,54 @@ class CRNNeuralSDE(nn.Module):
             ctx = torch.cat([ctx, protocol_embedding], dim=-1)
         return self._drift_net(x, ctx)
 
+
+class NeuralSDE(NeuralDrift, StochasticSurrogate):
+    """Full stochastic surrogate with drift and diffusion networks.
+
+    Mirrors the Chemical Langevin Equation structure:
+      dX = f(X, t; ctx) dt + g(X, t; ctx) dW
+    where f and g are ConditionedMLPs with FiLM modulation at every hidden layer.
+    """
+
+    def __init__(self, config: SDEConfig, n_species: int) -> None:
+        """Args:
+        config: SDE configuration.
+        n_species: Number of species (state dimension).
+        """
+        super().__init__(config, n_species)
+        d_context = 2 * config.d_model + config.d_protocol
+        self._diff_net = ConditionedMLP(
+            d_in=n_species,
+            d_hidden=config.d_hidden,
+            d_out=n_species * config.n_noise_channels,
+            d_context=d_context,
+            n_hidden_layers=config.n_hidden_layers,
+            dropout=config.mlp_dropout,
+        )
+
+    def diffusion(
+        self,
+        t: torch.Tensor,
+        state: torch.Tensor,
+        crn_context: CRNContext,
+        protocol_embedding: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute diffusion coefficient g(X, t; CRN embedding [; protocol embedding]).
+
+        Args:
+            t: Scalar time tensor.
+            state: (n_species,) or (B, n_species) current state.
+            crn_context: CRN encoder output.
+            protocol_embedding: Optional (d_protocol,) or (B, d_protocol) tensor.
+
+        Returns:
+            (n_species, n_noise_channels) or (B, n_species, n_noise_channels),
+            non-negative (softplus applied).
+        """
+        return self.diffusion_from_context(
+            t, state, crn_context.context_vector, protocol_embedding
+        )
+
     def diffusion_from_context(
         self,
         t: torch.Tensor,
@@ -139,11 +149,6 @@ class CRNNeuralSDE(nn.Module):
         protocol_embedding: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute diffusion from a pre-extracted context vector.
-
-        Unlike diffusion(), which extracts context_vector from a CRNContext,
-        this method accepts the context vector directly. This enables batched
-        computation where each transition in a (N, n_species) batch has its
-        own context vector from a (N, d_context) tensor.
 
         Args:
             t: (N,) or scalar time values.
@@ -164,3 +169,9 @@ class CRNNeuralSDE(nn.Module):
         if x.dim() == 1:
             return raw.view(self._n_species, n_noise)
         return raw.view(x.shape[0], self._n_species, n_noise)
+
+
+# Backward compatibility alias: old checkpoints use CRNNeuralSDE as the class
+# name in serialized configs but state dict keys (_drift_net.*, _diff_net.*) are
+# what actually matter for loading. NeuralSDE has identical keys.
+CRNNeuralSDE = NeuralSDE

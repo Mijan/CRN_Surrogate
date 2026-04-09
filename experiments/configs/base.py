@@ -11,6 +11,8 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 
+import torch
+
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
 from crn_surrogate.configs.training_config import (
     SchedulerType,
@@ -23,6 +25,7 @@ from crn_surrogate.measurement.config import (
     NoiseMode,
     NoiseSharing,
 )
+from crn_surrogate.simulator.base import Simulator, SurrogateModel
 
 
 @dataclass(frozen=True)
@@ -113,9 +116,46 @@ class BaseExperimentConfig:
             clip_state=True,
             d_protocol=self.d_protocol,
             mlp_dropout=self.mlp_dropout,
-            use_log1p=self.use_log1p,
-            deterministic=self.deterministic,
         )
+
+    def build_model(self, device: torch.device) -> SurrogateModel:
+        """Instantiate the appropriate model (NeuralDrift or NeuralSDE).
+
+        Args:
+            device: Device to place model parameters on.
+
+        Returns:
+            NeuralDrift when deterministic=True, NeuralSDE otherwise.
+        """
+        config = self.build_sde_config()
+        if self.deterministic:
+            from crn_surrogate.simulator.neural_sde import NeuralDrift
+
+            return NeuralDrift(config, self.max_n_species).to(device)
+        else:
+            from crn_surrogate.simulator.neural_sde import NeuralSDE
+
+            return NeuralSDE(config, self.max_n_species).to(device)
+
+    def build_simulator(self) -> Simulator:
+        """Instantiate the appropriate solver (ODE or SDE).
+
+        Returns:
+            EulerODESolver when deterministic=True, EulerMaruyamaSolver otherwise.
+            The state transform (log1p or identity) is baked into the solver.
+        """
+        from crn_surrogate.simulator.state_transform import get_state_transform
+
+        config = self.build_sde_config()
+        transform = get_state_transform(self.use_log1p)
+        if self.deterministic:
+            from crn_surrogate.simulator.ode_solver import EulerODESolver
+
+            return EulerODESolver(config, state_transform=transform)
+        else:
+            from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
+
+            return EulerMaruyamaSolver(config, state_transform=transform)
 
     def build_measurement_config(self) -> MeasurementConfig:
         """Build measurement model configuration."""

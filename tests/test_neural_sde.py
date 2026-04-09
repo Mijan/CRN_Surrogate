@@ -8,6 +8,9 @@ Covers:
 - clip_state=False allows states to go negative (no clamping applied).
 - Gradients flow through the solver back to SDE parameters.
 - Solver works for multi-species CRNs (Lotka-Volterra).
+- NeuralDrift has no diffusion network and is a SurrogateModel but not StochasticSurrogate.
+- NeuralSDE is both SurrogateModel and StochasticSurrogate.
+- CRNNeuralSDE alias works identically to NeuralSDE.
 """
 
 import torch
@@ -16,7 +19,8 @@ from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
 from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
+from crn_surrogate.simulator.neural_sde import CRNNeuralSDE, NeuralDrift, NeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -283,3 +287,50 @@ def test_solver_with_resolved_protocol_none_works():
         sde, torch.tensor([0.0]), ctx, t_span, dt=0.1, resolved_protocol=None
     )
     assert traj.states.shape == (10, 1)
+
+
+# ── NeuralDrift class ─────────────────────────────────────────────────────────
+
+
+def test_neural_drift_is_surrogate_model_not_stochastic():
+    """NeuralDrift must be a SurrogateModel but NOT a StochasticSurrogate."""
+    model = NeuralDrift(SDEConfig(d_model=16, d_hidden=32), n_species=3)
+    assert isinstance(model, SurrogateModel)
+    assert not isinstance(model, StochasticSurrogate)
+
+
+def test_neural_sde_is_both_surrogate_and_stochastic():
+    """NeuralSDE must be both SurrogateModel and StochasticSurrogate."""
+    model = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=3)
+    assert isinstance(model, SurrogateModel)
+    assert isinstance(model, StochasticSurrogate)
+
+
+def test_neural_drift_has_no_diffusion_parameters():
+    """NeuralDrift allocates fewer parameters than NeuralSDE (no diffusion network)."""
+    config = SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4)
+    drift_model = NeuralDrift(config, n_species=3)
+    sde_model = NeuralSDE(config, n_species=3)
+    assert sum(p.numel() for p in drift_model.parameters()) < sum(
+        p.numel() for p in sde_model.parameters()
+    )
+
+
+def test_neural_drift_has_no_diffusion_method():
+    """NeuralDrift must not have a diffusion() method."""
+    model = NeuralDrift(SDEConfig(d_model=16, d_hidden=32), n_species=3)
+    assert not hasattr(model, "diffusion")
+    assert not hasattr(model, "diffusion_from_context")
+
+
+def test_neural_drift_drift_output_shape():
+    """NeuralDrift.drift() returns the correct shape."""
+    ctx = _make_context(birth_death())
+    model = NeuralDrift(SDEConfig(d_model=16, d_hidden=32), n_species=1)
+    drift = model.drift(torch.tensor(0.0), torch.tensor([5.0]), ctx)
+    assert drift.shape == (1,)
+
+
+def test_crn_neural_sde_alias_is_neural_sde():
+    """CRNNeuralSDE is an alias for NeuralSDE and produces identical results."""
+    assert CRNNeuralSDE is NeuralSDE

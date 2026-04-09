@@ -72,7 +72,7 @@ class TestDeterministicSolver:
         from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
         from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
         from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
-        from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+        from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
         from crn_surrogate.simulator.ode_solver import EulerODESolver
         from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 
@@ -87,35 +87,38 @@ class TestDeterministicSolver:
         sde_config = SDEConfig(
             d_model=64, d_hidden=128, n_noise_channels=crn.n_reactions
         )
-        sde = CRNNeuralSDE(sde_config, n_species=crn.n_species)
+        # Use NeuralDrift for the ODE solver; NeuralSDE for stochastic comparison.
+        drift_model = NeuralDrift(sde_config, n_species=crn.n_species)
+        sde_model = NeuralSDE(sde_config, n_species=crn.n_species)
 
         ode_solver = EulerODESolver(sde_config)
         stoch_solver = EulerMaruyamaSolver(sde_config)
+
         t_span = torch.linspace(0.0, 5.0, 20)
         initial_state = torch.tensor([5.0])
 
-        return ode_solver, stoch_solver, sde, initial_state, crn_context, t_span
+        return ode_solver, stoch_solver, drift_model, sde_model, initial_state, crn_context, t_span
 
     def test_ode_solver_is_reproducible(self, solver_setup):
         """Two EulerODESolver rollouts from the same state should be identical."""
-        ode_solver, _, sde, initial_state, crn_context, t_span = solver_setup
+        ode_solver, _, drift_model, _, initial_state, crn_context, t_span = solver_setup
         with torch.no_grad():
             traj1 = ode_solver.solve(
-                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+                drift_model, initial_state.clone(), crn_context, t_span, dt=0.1
             )
             traj2 = ode_solver.solve(
-                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+                drift_model, initial_state.clone(), crn_context, t_span, dt=0.1
             )
         torch.testing.assert_close(traj1.states, traj2.states)
 
     def test_ode_solver_differs_from_stochastic(self, solver_setup):
-        """EulerODESolver should differ from EulerMaruyamaSolver (with overwhelming probability)."""
-        ode_solver, stoch_solver, sde, initial_state, crn_context, t_span = solver_setup
+        """EulerODESolver (NeuralDrift) should differ from EulerMaruyamaSolver (NeuralSDE)."""
+        ode_solver, stoch_solver, drift_model, sde_model, initial_state, crn_context, t_span = solver_setup
         with torch.no_grad():
             det_traj = ode_solver.solve(
-                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+                drift_model, initial_state.clone(), crn_context, t_span, dt=0.1
             )
             stoch_traj = stoch_solver.solve(
-                sde, initial_state.clone(), crn_context, t_span, dt=0.1
+                sde_model, initial_state.clone(), crn_context, t_span, dt=0.1
             )
         assert not torch.allclose(det_traj.states, stoch_traj.states)

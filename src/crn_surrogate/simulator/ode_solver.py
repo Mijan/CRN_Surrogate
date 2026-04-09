@@ -15,14 +15,14 @@ import torch
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.base import Simulator, SurrogateModel
 from crn_surrogate.simulator.state_transform import StateTransform
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import ResolvedProtocol
 
 
-class EulerODESolver:
+class EulerODESolver(Simulator):
     """Pure Euler (ODE) integrator for the neural drift network.
 
     X(t+dt) = X(t) + f(X, t) * dt
@@ -43,7 +43,7 @@ class EulerODESolver:
 
     def solve(
         self,
-        sde: CRNNeuralSDE,
+        model: SurrogateModel,
         initial_state: torch.Tensor,
         crn_context: CRNContext,
         t_span: torch.Tensor,
@@ -53,7 +53,7 @@ class EulerODESolver:
         """Integrate the neural drift forward in time (no noise).
 
         Args:
-            sde: The neural SDE module (only its drift network is used).
+            model: The surrogate model (only its drift network is used).
             initial_state: (n_species,) initial state.
             crn_context: CRN encoder output for conditioning.
             t_span: (T,) time points at which to record the state.
@@ -95,7 +95,7 @@ class EulerODESolver:
                 span_idx += 1
 
             state = self._step(
-                sde,
+                model,
                 state,
                 t,
                 dt,
@@ -114,7 +114,7 @@ class EulerODESolver:
 
     def _step(
         self,
-        sde: CRNNeuralSDE,
+        model: SurrogateModel,
         state: torch.Tensor,
         t: torch.Tensor,
         dt: float,
@@ -140,7 +140,7 @@ class EulerODESolver:
                 state[idx] = value
 
         # 2. Compute drift only — diffusion is not called.
-        f = sde.drift(t, state, crn_context, protocol_embedding)
+        f = model.drift(t, state, crn_context, protocol_embedding)
 
         # 3. Euler step (no noise term).
         new_state = state + f * dt

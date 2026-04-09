@@ -113,7 +113,7 @@ class CheckpointManager:
         self,
         checkpoint: dict,
         encoder: nn.Module,
-        sde: nn.Module,
+        model: nn.Module,
         optimizer: Optimizer,
         scheduler: LRScheduler,
     ) -> int:
@@ -125,7 +125,7 @@ class CheckpointManager:
         Args:
             checkpoint: Dict loaded from a checkpoint .pt file.
             encoder: Encoder module to restore weights into.
-            sde: SDE module to restore weights into.
+            model: Surrogate model to restore weights into (checkpoint key: "sde_state").
             optimizer: Optimizer to restore state into.
             scheduler: LR scheduler to restore state into.
 
@@ -133,7 +133,7 @@ class CheckpointManager:
             The epoch to resume from (checkpoint["epoch"] + 1).
         """
         encoder.load_state_dict(checkpoint["encoder_state"])
-        sde.load_state_dict(checkpoint["sde_state"])
+        model.load_state_dict(checkpoint["sde_state"])
 
         if "optimizer_state" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer_state"])

@@ -18,10 +18,10 @@ from crn_surrogate.configs.training_config import (
 from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.measurement.direct import DirectObservation
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.base import Simulator, StochasticSurrogate, SurrogateModel
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
-from crn_surrogate.simulator.state_transform import get_state_transform
+from crn_surrogate.simulator.state_transform import StateTransform
 from crn_surrogate.training.checkpointing import CheckpointManager
 from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
@@ -87,33 +87,41 @@ class Trainer:
     def __init__(
         self,
         encoder: BipartiteGNNEncoder,
-        sde: CRNNeuralSDE,
+        model: SurrogateModel,
         model_config: ModelConfig,
         train_config: TrainingConfig,
+        simulator: Simulator | None = None,
         loss_fn: TrajectoryLoss | None = None,
     ) -> None:
         """Args:
         encoder: The bipartite GNN encoder.
-        sde: The neural SDE.
+        model: The surrogate model (NeuralDrift or NeuralSDE).
         model_config: Model hyperparameters.
         train_config: Training hyperparameters.
+        simulator: Optional solver for rollout validation. When None, a solver
+            is automatically selected based on the model type (EulerMaruyama
+            for stochastic models, EulerODE for deterministic models).
         loss_fn: Rollout loss function. Defaults to CombinedTrajectoryLoss.
             Only used when training_mode is FULL_ROLLOUT or SCHEDULED_SAMPLING.
         """
         self._encoder = encoder
-        self._sde = sde
+        self._model = model
         self._model_config = model_config
         self._train_config = train_config
         self._rollout_loss = (
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
-        self._state_transform = get_state_transform(model_config.sde.use_log1p)
-        if model_config.sde.deterministic:
-            self._solver: EulerMaruyamaSolver | EulerODESolver = EulerODESolver(
+        # Default to identity transform; callers using log1p should pass simulator
+        # constructed with the appropriate StateTransform via build_simulator().
+        self._state_transform: StateTransform = StateTransform()
+        if simulator is not None:
+            self._solver: Simulator = simulator
+        elif isinstance(model, StochasticSurrogate):
+            self._solver = EulerMaruyamaSolver(
                 model_config.sde, state_transform=self._state_transform
             )
         else:
-            self._solver = EulerMaruyamaSolver(
+            self._solver = EulerODESolver(
                 model_config.sde, state_transform=self._state_transform
             )
 
@@ -134,7 +142,7 @@ class Trainer:
 
         params = (
             list(encoder.parameters())
-            + list(sde.parameters())
+            + list(model.parameters())
             + list(self._measurement_model.parameters())
         )
         self._optimizer = torch.optim.AdamW(
@@ -185,7 +193,7 @@ class Trainer:
             TrainingResult with per-epoch train and val losses.
         """
         result = TrainingResult()
-        collator = CRNCollator(n_species_sde=self._sde.n_species)
+        collator = CRNCollator(n_species_sde=self._model.n_species)
         train_loader = DataLoader(
             train_dataset,
             batch_size=self._train_config.batch_size,
@@ -272,7 +280,7 @@ class Trainer:
         start_epoch = self._checkpoint_mgr.load(
             checkpoint,
             self._encoder,
-            self._sde,
+            self._model,
             self._optimizer,
             self._scheduler,
         )
@@ -300,7 +308,7 @@ class Trainer:
         state = {
             "epoch": epoch,
             "encoder_state": self._encoder.state_dict(),
-            "sde_state": self._sde.state_dict(),
+            "sde_state": self._model.state_dict(),
             "optimizer_state": self._optimizer.state_dict(),
             "scheduler_state": self._scheduler.state_dict(),
             "best_val_loss": self._checkpoint_mgr.best_val_loss,
@@ -320,7 +328,7 @@ class Trainer:
     def _train_epoch(self, loader: DataLoader, epoch: int) -> tuple[float, float]:
         """Run one training epoch and return (mean loss, mean pre-clip grad norm)."""
         self._encoder.train()
-        self._sde.train()
+        self._model.train()
         total_loss = 0.0
         batch_grad_norms: list[float] = []
         n_batches = 0
@@ -336,7 +344,7 @@ class Trainer:
             with self._timer.time("backward"):
                 loss.backward()
             # clip_grad_norm_ returns the pre-clipping total norm — free diagnostic
-            all_params = list(self._encoder.parameters()) + list(self._sde.parameters())
+            all_params = list(self._encoder.parameters()) + list(self._model.parameters())
             if self._measurement_model is not None:
                 all_params += list(self._measurement_model.parameters())
             total_norm = nn.utils.clip_grad_norm_(
@@ -425,7 +433,7 @@ class Trainer:
             k = self._train_config.n_sde_samples
             pred_samples = [
                 self._solver.solve(
-                    self._sde,
+                    self._model,
                     item.init_state_padded.clone(),
                     item.context,
                     item.times,
@@ -489,12 +497,18 @@ class Trainer:
         # drift_from_context / diffusion_from_context.
 
         # ONE batched forward pass (replaces B sequential passes)
-        all_drift = self._sde.drift_from_context(t_all, y_t, ctx_expanded, None)
-        all_G = self._sde.diffusion_from_context(t_all, y_t, ctx_expanded, None)
+        all_drift = self._model.drift_from_context(t_all, y_t, ctx_expanded, None)
 
         mu = y_t + all_drift * dt  # (B * n_trans, S)
-        variance = (all_G**2).sum(dim=-1) * dt  # (B * n_trans, S)
-        variance = variance.clamp(min=self._nll_loss._min_variance)
+
+        if isinstance(self._model, StochasticSurrogate):
+            all_G = self._model.diffusion_from_context(t_all, y_t, ctx_expanded, None)
+            variance = (all_G**2).sum(dim=-1) * dt  # (B * n_trans, S)
+            variance = variance.clamp(min=self._nll_loss._min_variance)
+        else:
+            # Deterministic model: process variance is zero; measurement model
+            # provides the observation noise floor via its own min_variance clamp.
+            variance = torch.zeros_like(mu)
 
         if self._measurement_model is not None:
             # Combine process and observation variance via the measurement model
@@ -562,8 +576,8 @@ class Trainer:
             compute_rollout is False.
         """
         self._encoder.eval()
-        self._sde.eval()
-        collator = CRNCollator(n_species_sde=self._sde.n_species)
+        self._model.eval()
+        collator = CRNCollator(n_species_sde=self._model.n_species)
         loader = DataLoader(
             val_dataset,
             batch_size=self._train_config.batch_size,
@@ -591,7 +605,7 @@ class Trainer:
                         k = self._train_config.n_sde_samples
                         pred_samples = [
                             self._solver.solve(
-                                self._sde,
+                                self._model,
                                 item.init_state_padded.clone(),
                                 item.context,
                                 item.times,

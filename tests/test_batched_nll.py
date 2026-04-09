@@ -226,7 +226,7 @@ def test_batched_nll_matches_sequential(tmp_path):
     sequential_total = torch.zeros(1, device=batch["stoichiometry"].device)
     for item in items:
         sequential_total = sequential_total + trainer._nll_loss.compute(
-            sde=trainer._sde,
+            sde=trainer._model,
             crn_context=item.context,
             true_trajectory=item.true_trajs_padded,
             times=item.times,

@@ -23,7 +23,6 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
 from crn_surrogate.training.trainer import Trainer
 from experiments.configs.registry import available_configs, get_config
 
@@ -231,23 +230,24 @@ def main() -> None:
     # ── Build model ──────────────────────────────────────────────────────────
     model_config = cfg.build_model_config()
     encoder = BipartiteGNNEncoder(model_config.encoder).to(device)
-    sde = CRNNeuralSDE(model_config.sde, n_species=cfg.max_n_species).to(device)
+    model = cfg.build_model(device)
+    simulator = cfg.build_simulator()
 
     train_config = cfg.build_training_config(use_wandb=use_wandb)
     if args.max_epochs is not None:
         train_config = dataclasses.replace(train_config, max_epochs=args.max_epochs)
 
     print(f"Encoder params: {sum(p.numel() for p in encoder.parameters()):,}")
-    print(f"SDE params:     {sum(p.numel() for p in sde.parameters()):,}")
+    print(f"Model params:   {sum(p.numel() for p in model.parameters()):,}")
 
     # ── Resume from checkpoint if requested ──────────────────────────────────
-    trainer = Trainer(encoder, sde, model_config, train_config)
+    trainer = Trainer(encoder, model, model_config, train_config, simulator=simulator)
     start_epoch = 1
     if args.resume_weights_only:
         checkpoint = _resolve_checkpoint(args.resume_weights_only, cfg, device, use_wandb)
         if checkpoint is not None:
             encoder.load_state_dict(checkpoint["encoder_state"])
-            sde.load_state_dict(checkpoint["sde_state"])
+            model.load_state_dict(checkpoint["sde_state"])
             start_epoch = checkpoint.get("epoch", 0) + 1
             print(f"Loaded model weights from checkpoint. Starting fresh training from epoch {start_epoch} with config LR={train_config.lr}, scheduler={train_config.scheduler_type}")
         else:
@@ -271,7 +271,7 @@ def main() -> None:
         torch.save(
             {
                 "encoder_state": encoder.state_dict(),
-                "sde_state": sde.state_dict(),
+                "sde_state": model.state_dict(),
                 "config": cfg.to_dict(),
                 "train_losses": result.train_losses,
                 "val_losses": result.val_losses,

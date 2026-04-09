@@ -7,14 +7,14 @@ import torch
 from crn_surrogate.configs.model_config import SDEConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.neural_sde import CRNNeuralSDE
+from crn_surrogate.simulator.base import Simulator, StochasticSurrogate
 from crn_surrogate.simulator.state_transform import StateTransform
 
 if TYPE_CHECKING:
     from crn_surrogate.crn.inputs import ResolvedProtocol
 
 
-class EulerMaruyamaSolver:
+class EulerMaruyamaSolver(Simulator):
     """Euler-Maruyama integrator for the neural SDE.
 
     X(t+dt) = X(t) + f(X, t) * dt + g(X, t) * sqrt(dt) * Z,  Z ~ N(0, I)
@@ -32,7 +32,7 @@ class EulerMaruyamaSolver:
 
     def solve(
         self,
-        sde: CRNNeuralSDE,
+        model: StochasticSurrogate,
         initial_state: torch.Tensor,
         crn_context: CRNContext,
         t_span: torch.Tensor,
@@ -42,7 +42,7 @@ class EulerMaruyamaSolver:
         """Integrate the neural SDE forward in time.
 
         Args:
-            sde: The neural SDE module.
+            model: The stochastic surrogate model.
             initial_state: (n_species,) initial state.
             crn_context: CRN encoder output for conditioning.
             t_span: (T,) time points at which to record the state.
@@ -85,7 +85,7 @@ class EulerMaruyamaSolver:
                 span_idx += 1
 
             state = self._step(
-                sde,
+                model,
                 state,
                 t,
                 dt,
@@ -105,7 +105,7 @@ class EulerMaruyamaSolver:
 
     def _step(
         self,
-        sde: CRNNeuralSDE,
+        model: StochasticSurrogate,
         state: torch.Tensor,
         t: torch.Tensor,
         dt: float,
@@ -135,8 +135,8 @@ class EulerMaruyamaSolver:
                 state[idx] = value
 
         # 2. Compute drift and diffusion on full state (including clamped species).
-        f = sde.drift(t, state, crn_context, protocol_embedding)
-        g = sde.diffusion(t, state, crn_context, protocol_embedding)
+        f = model.drift(t, state, crn_context, protocol_embedding)
+        g = model.diffusion(t, state, crn_context, protocol_embedding)
 
         # 3. Euler-Maruyama step.
         z = torch.randn(g.shape[-1], device=state.device)

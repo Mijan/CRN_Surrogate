@@ -236,9 +236,9 @@ def test_batched_encoder_training_loss_matches(tmp_path):
     torch.manual_seed(42)
     trainer, dataset = _make_trainer(tmp_path)
     trainer._encoder.eval()
-    trainer._sde.eval()
+    trainer._model.eval()
 
-    collator = CRNCollator(n_species_sde=trainer._sde.n_species)
+    collator = CRNCollator(n_species_sde=trainer._model.n_species)
     batch = collator(list(dataset))
     batch = trainer._batch_to_device(batch)
 
