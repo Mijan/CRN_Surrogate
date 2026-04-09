@@ -377,11 +377,11 @@ def main(cfg: DictConfig) -> None:
             cfg,
             simulator=simulator,
             session=session,
-            output_dir=Path(gen_cfg.generation.output_dir),
+            output_dir=Path(gen_cfg.output_dir),
             seed=cfg.seed,
-            checkpoint_every=gen_cfg.generation.checkpoint_every,
-            n_init_conditions=gen_cfg.generation.n_init_conditions,
-            use_ode_prescreen=gen_cfg.generation.use_ode_prescreen,
+            checkpoint_every=gen_cfg.checkpoint_every,
+            n_init_conditions=gen_cfg.n_init_conditions,
+            use_ode_prescreen=gen_cfg.use_ode_prescreen,
         )
 
 
