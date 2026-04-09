@@ -109,7 +109,9 @@ class WandbSession:
             return
         import wandb
 
-        artifact = wandb.Artifact(name=name, type=artifact_type, metadata=metadata or {})
+        artifact = wandb.Artifact(
+            name=name, type=artifact_type, metadata=metadata or {}
+        )
         for fp in file_paths:
             artifact.add_file(str(fp))
         self._run.log_artifact(artifact)

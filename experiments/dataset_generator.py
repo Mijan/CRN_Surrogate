@@ -56,7 +56,10 @@ class DatasetGenerator:
             resume_train = self._resolve_resume("train")
             print(f"Generating {self._ds_cfg.n_train} training items...")
             train_items, train_meta = self._generate_split(
-                gen, simulator, time_grid, session,
+                gen,
+                simulator,
+                time_grid,
+                session,
                 n_items=self._ds_cfg.n_train,
                 split_name="train",
                 output_dir=output_dir,
@@ -68,7 +71,10 @@ class DatasetGenerator:
             resume_val = self._resolve_resume("val")
             print(f"Generating {self._ds_cfg.n_val} validation items...")
             val_items, val_meta = self._generate_split(
-                gen, simulator, time_grid, session,
+                gen,
+                simulator,
+                time_grid,
+                session,
                 n_items=self._ds_cfg.n_val,
                 split_name="val",
                 output_dir=output_dir,
@@ -76,7 +82,9 @@ class DatasetGenerator:
                 resume_items=resume_val,
             )
 
-            self._save(output_dir, train_items, val_items, train_meta, val_meta, session)
+            self._save(
+                output_dir, train_items, val_items, train_meta, val_meta, session
+            )
 
     def _resolve_resume(self, split: str) -> list[TrajectoryItem] | None:
         """Resolve resume checkpoint for a split, returning loaded items or None.
@@ -213,10 +221,13 @@ class DatasetGenerator:
                 )
 
                 if session.active and len(items) % 10 == 0:
-                    session.log({
-                        "data/items_generated": len(items),
-                        "data/pass_rate": stats["n_curated_pass"] / stats["n_attempted"],
-                    })
+                    session.log(
+                        {
+                            "data/items_generated": len(items),
+                            "data/pass_rate": stats["n_curated_pass"]
+                            / stats["n_attempted"],
+                        }
+                    )
 
                 if checkpoint_every > 0 and len(items) % checkpoint_every == 0:
                     self._save_checkpoint(items, split_name, output_dir, session)
@@ -253,7 +264,9 @@ class DatasetGenerator:
         torch.save(CRNTrajectoryDataset(items), path)
         print(f"  Checkpoint: {len(items)} items -> {path.name}")
         session.log_artifact(
-            f"{name}_checkpoint", "dataset-checkpoint", path,
+            f"{name}_checkpoint",
+            "dataset-checkpoint",
+            path,
             metadata={"n_items": len(items)},
         )
 
@@ -297,7 +310,8 @@ class DatasetGenerator:
         print(f"Saved: {train_path}, {val_path}, {meta_path}")
 
         session.log_multi_file_artifact(
-            f"{name}_dataset", "dataset",
+            f"{name}_dataset",
+            "dataset",
             [train_path, val_path, meta_path],
             metadata=metadata,
         )
