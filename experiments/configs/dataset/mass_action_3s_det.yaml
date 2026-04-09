@@ -1,5 +1,5 @@
-n_train: 20000
-n_val: 2000
+n_train: 100000
+n_val: 10000
 n_ssa_trajectories: 1
 t_max: 20.0
 n_time_points: 100
