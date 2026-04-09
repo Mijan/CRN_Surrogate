@@ -50,6 +50,9 @@ class TrainingConfig:
     num_workers: int = 4
     shuffle_train: bool = True
 
+    # DataCache settings
+    gpu_memory_fraction: float = 0.5  # fraction of free GPU memory to use for cache
+
     def __repr__(self) -> str:
         return (
             f"TrainingConfig(lr={self.lr}, max_epochs={self.max_epochs}, "

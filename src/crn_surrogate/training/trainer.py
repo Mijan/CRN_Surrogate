@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from crn_surrogate.configs.model_config import ModelConfig
@@ -15,7 +14,7 @@ from crn_surrogate.configs.training_config import (
     TrainingConfig,
     TrainingMode,
 )
-from crn_surrogate.data.dataset import CRNCollator, CRNTrajectoryDataset
+from crn_surrogate.data.dataset import CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.measurement.direct import DirectObservation
 from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
@@ -23,6 +22,7 @@ from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.simulator.state_transform import StateTransform
 from crn_surrogate.training.checkpointing import CheckpointManager
+from crn_surrogate.training.data_cache import DataCache
 from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
     TrajectoryLoss,
@@ -183,19 +183,24 @@ class Trainer:
             TrainingResult with per-epoch train and val losses.
         """
         result = TrainingResult()
-        collator = CRNCollator(n_species_sde=self._model.n_species)
-        train_loader = DataLoader(
+        n_species_pad = self._model.n_species
+        self._train_cache = DataCache.from_dataset(
             train_dataset,
-            batch_size=self._train_config.batch_size,
-            shuffle=self._train_config.shuffle_train,
-            collate_fn=collator,
-            num_workers=self._train_config.num_workers,
-            pin_memory=True,
+            self._device,
+            n_species_pad,
+            gpu_memory_fraction=self._train_config.gpu_memory_fraction,
         )
+        if val_dataset is not None:
+            self._val_cache = DataCache.from_dataset(
+                val_dataset,
+                self._device,
+                n_species_pad,
+                gpu_memory_fraction=self._train_config.gpu_memory_fraction,
+            )
 
         for epoch in range(start_epoch, self._train_config.max_epochs + 1):
             self._timer = PhaseTimer(device=self._timer.device)
-            train_loss, mean_grad_norm = self._train_epoch(train_loader, epoch)
+            train_loss, mean_grad_norm = self._train_epoch(self._train_cache, epoch)
             result.train_losses.append(train_loss)
             result.grad_norms.append(mean_grad_norm)
             result.learning_rates.append(self._optimizer.param_groups[0]["lr"])
@@ -205,7 +210,7 @@ class Trainer:
             if val_dataset is not None and epoch % self._train_config.val_every == 0:
                 do_rollout = self._effective_mode(epoch) != TrainingMode.TEACHER_FORCING
                 val_loss, val_nll = self._validate(
-                    val_dataset, compute_rollout=do_rollout
+                    self._val_cache, compute_rollout=do_rollout
                 )
                 result.val_losses.append(val_loss)
                 result.val_nll_losses.append(val_nll)
@@ -308,14 +313,21 @@ class Trainer:
             state["measurement_model_state"] = self._measurement_model.state_dict()
         return state
 
-    def _batch_to_device(self, batch: dict) -> dict:
-        """Move all tensor values in a batch dict to the training device."""
-        return {
-            k: v.to(self._device) if isinstance(v, torch.Tensor) else v
-            for k, v in batch.items()
-        }
+    def _make_batches(self, cache: DataCache, shuffle: bool) -> list[torch.Tensor]:
+        """Split cache indices into batches, optionally shuffled.
 
-    def _train_epoch(self, loader: DataLoader, epoch: int) -> tuple[float, float]:
+        Args:
+            cache: The DataCache to iterate over.
+            shuffle: Whether to shuffle indices before splitting.
+
+        Returns:
+            List of 1-D index tensors, each of length <= batch_size.
+        """
+        N = cache.trajectories.shape[0]
+        indices = torch.randperm(N) if shuffle else torch.arange(N)
+        return list(indices.split(self._train_config.batch_size))
+
+    def _train_epoch(self, cache: DataCache, epoch: int) -> tuple[float, float]:
         """Run one training epoch and return (mean loss, mean pre-clip grad norm)."""
         self._encoder.train()
         self._model.train()
@@ -323,9 +335,10 @@ class Trainer:
         batch_grad_norms: list[float] = []
         n_batches = 0
 
-        for batch in tqdm(loader, desc="train", leave=False):
+        batches = self._make_batches(cache, shuffle=self._train_config.shuffle_train)
+        for batch_indices in tqdm(batches, desc="train", leave=False):
             self._timer.start_batch(n_batches=n_batches)
-            batch = self._batch_to_device(batch)
+            batch = cache.get_batch(batch_indices)
 
             with self._timer.time("forward"):
                 loss = self._compute_batch_loss(batch, epoch)
@@ -393,7 +406,7 @@ class Trainer:
         Returns:
             List of B PreparedItems.
         """
-        B = batch["stoichiometry"].shape[0]
+        B = len(batch["crn_reprs"])
         crn_reprs = [batch["crn_reprs"][idx].to(self._device) for idx in range(B)]
         contexts = self._encoder.forward_batch(crn_reprs)
 
@@ -410,7 +423,7 @@ class Trainer:
 
     def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
         """Compute mean loss over all items in the batch."""
-        B = batch["stoichiometry"].shape[0]
+        B = len(batch["crn_reprs"])
         mode = self._effective_mode(epoch)
 
         # Single batched encoder pass instead of B sequential ones
@@ -420,7 +433,7 @@ class Trainer:
             return self._compute_batch_nll_batched(items)
 
         # Rollout modes stay sequential (each item needs K independent SDE solves)
-        total = torch.zeros(1, device=batch["stoichiometry"].device)
+        total = torch.zeros(1, device=self._device)
         for item in items:
             k = self._train_config.n_sde_samples
             pred_samples = [
@@ -553,13 +566,13 @@ class Trainer:
 
     def _validate(
         self,
-        val_dataset: CRNTrajectoryDataset,
+        val_cache: DataCache,
         compute_rollout: bool = False,
     ) -> tuple[float, float]:
-        """Compute validation losses over the full validation dataset.
+        """Compute validation losses over the full validation cache.
 
         Args:
-            val_dataset: Validation trajectories.
+            val_cache: Pre-built DataCache for the validation set.
             compute_rollout: If True, also compute the full SDE rollout loss
                 (expensive). If False, only compute teacher-forcing NLL.
 
@@ -569,22 +582,13 @@ class Trainer:
         """
         self._encoder.eval()
         self._model.eval()
-        collator = CRNCollator(n_species_sde=self._model.n_species)
-        loader = DataLoader(
-            val_dataset,
-            batch_size=self._train_config.batch_size,
-            shuffle=False,
-            collate_fn=collator,
-            num_workers=self._train_config.num_workers,
-            pin_memory=True,
-        )
         total_rollout = 0.0
         total_nll = 0.0
         n_batches = 0
         with torch.no_grad():
-            for batch in loader:
-                batch = self._batch_to_device(batch)
-                B = batch["stoichiometry"].shape[0]
+            for batch_indices in self._make_batches(val_cache, shuffle=False):
+                batch = val_cache.get_batch(batch_indices)
+                B = len(batch["crn_reprs"])
 
                 # Single batched encoder pass — shared by NLL and rollout
                 items = self._prepare_batch(batch)
@@ -592,7 +596,7 @@ class Trainer:
                 total_nll += self._compute_batch_nll_batched(items).item()
 
                 if compute_rollout:
-                    rollout_total = torch.zeros(1, device=batch["stoichiometry"].device)
+                    rollout_total = torch.zeros(1, device=self._device)
                     for item in items:
                         k = self._train_config.n_sde_samples
                         pred_samples = [

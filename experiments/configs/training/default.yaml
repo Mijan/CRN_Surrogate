@@ -9,3 +9,4 @@ val_every: 10
 checkpoint_every: 0
 num_workers: 0
 shuffle_train: true
+gpu_memory_fraction: 0.5
