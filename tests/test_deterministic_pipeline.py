@@ -12,18 +12,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
-from experiments.scripts.generate_dataset import _simulate_ode
+from crn_surrogate.simulation.data_simulator import ODESimulator
 
 
 class TestODESimulation:
-    """Test the forward Euler ODE simulation."""
+    """Test the forward Euler ODE simulation via ODESimulator."""
 
     def test_birth_death_reaches_steady_state(self):
         """Birth-death ODE should reach steady state k_birth/k_death."""
         crn = birth_death(k_birth=5.0, k_death=0.5)
         initial_state = torch.tensor([0.0])
         time_grid = torch.linspace(0.0, 50.0, 200)
-        result = _simulate_ode(crn, initial_state, 50.0, time_grid)
+        result = ODESimulator().simulate(crn, initial_state, 50.0, 1, time_grid)
         assert result is not None
         final_state = result[0, -1, 0].item()
         expected_steady_state = 5.0 / 0.5  # = 10.0
@@ -35,7 +35,7 @@ class TestODESimulation:
         initial_state = torch.tensor([5.0])
         T = 50
         time_grid = torch.linspace(0.0, 20.0, T)
-        result = _simulate_ode(crn, initial_state, 20.0, time_grid)
+        result = ODESimulator().simulate(crn, initial_state, 20.0, 1, time_grid)
         assert result is not None
         assert result.shape == (1, T, 1)
 
@@ -45,8 +45,8 @@ class TestODESimulation:
         initial_state = torch.tensor([10.0])
         # Use a very low threshold so that linear growth from ~10 to >1000 triggers it.
         time_grid = torch.linspace(0.0, 100.0, 100)
-        result = _simulate_ode(
-            crn, initial_state, 100.0, time_grid, blowup_threshold=1e3
+        result = ODESimulator(blowup_threshold=1e3).simulate(
+            crn, initial_state, 100.0, 1, time_grid
         )
         assert result is None
 
@@ -55,7 +55,7 @@ class TestODESimulation:
         crn = lotka_volterra(k_prey_birth=1.0, k_predation=0.01, k_predator_death=0.5)
         initial_state = torch.tensor([40.0, 9.0])
         time_grid = torch.linspace(0.0, 30.0, 300)
-        result = _simulate_ode(crn, initial_state, 30.0, time_grid)
+        result = ODESimulator().simulate(crn, initial_state, 30.0, 1, time_grid)
         assert result is not None
         # Both species should have nonzero temporal variation
         temporal_std = result[0, :, :].std(dim=0)

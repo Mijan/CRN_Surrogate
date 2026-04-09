@@ -210,6 +210,33 @@ def build_dataset_generator_config(cfg: DictConfig):
     )
 
 
+def build_data_simulator(cfg: DictConfig):
+    """Instantiate the appropriate DataSimulator for dataset generation.
+
+    Args:
+        cfg: Fully resolved Hydra config.
+
+    Returns:
+        ODESimulator if cfg.solver.deterministic, else FastSSASimulator or SSASimulator.
+    """
+    from crn_surrogate.simulation.data_simulator import (
+        FastSSASimulator,
+        ODESimulator,
+        SSASimulator,
+    )
+
+    if cfg.solver.deterministic:
+        return ODESimulator()
+
+    timeout = cfg.generation.sim_timeout
+    if cfg.generation.use_fast_ssa:
+        try:
+            return FastSSASimulator(timeout=timeout)
+        except ImportError:
+            print("Numba not available, falling back to standard SSA.")
+    return SSASimulator(timeout=timeout)
+
+
 def select_device(device_str: str) -> torch.device:
     """Resolve 'auto', 'cpu', 'cuda', 'mps' to a torch.device.
 
