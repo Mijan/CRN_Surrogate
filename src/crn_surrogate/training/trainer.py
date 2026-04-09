@@ -187,9 +187,9 @@ class Trainer:
         train_loader = DataLoader(
             train_dataset,
             batch_size=self._train_config.batch_size,
-            shuffle=True,
+            shuffle=self._train_config.shuffle_train,
             collate_fn=collator,
-            num_workers=0,
+            num_workers=self._train_config.num_workers,
             pin_memory=True,
         )
 
@@ -575,7 +575,7 @@ class Trainer:
             batch_size=self._train_config.batch_size,
             shuffle=False,
             collate_fn=collator,
-            num_workers=0,
+            num_workers=self._train_config.num_workers,
             pin_memory=True,
         )
         total_rollout = 0.0

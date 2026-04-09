@@ -127,6 +127,8 @@ def build_training_config(cfg: DictConfig, *, use_wandb: bool = True) -> Trainin
         use_wandb=use_wandb,
         wandb_project=cfg.wandb_project,
         wandb_run_name=f"{cfg.experiment_name}_train",
+        num_workers=t.num_workers,
+        shuffle_train=t.shuffle_train,
     )
 
 

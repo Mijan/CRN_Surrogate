@@ -46,6 +46,10 @@ class TrainingConfig:
     wandb_project: str = "crn-surrogate"
     wandb_run_name: str | None = None
 
+    # DataLoader settings
+    num_workers: int = 4
+    shuffle_train: bool = True
+
     def __repr__(self) -> str:
         return (
             f"TrainingConfig(lr={self.lr}, max_epochs={self.max_epochs}, "

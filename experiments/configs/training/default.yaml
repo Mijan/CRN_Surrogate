@@ -7,3 +7,5 @@ grad_clip_norm: 1.0
 scheduler_type: cosine
 val_every: 10
 checkpoint_every: 0
+num_workers: 2
+shuffle_train: true
