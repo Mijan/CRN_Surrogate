@@ -7,5 +7,5 @@ grad_clip_norm: 1.0
 scheduler_type: reduce_on_plateau
 val_every: 5
 checkpoint_every: 10
-num_workers: 2
+num_workers: 0
 shuffle_train: true
