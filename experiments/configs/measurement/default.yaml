@@ -1,0 +1,4 @@
+noise_mode: learned
+noise_sharing: shared
+noise_init_eps: 0.02
+min_variance: 1.0e-2

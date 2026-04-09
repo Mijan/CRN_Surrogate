@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - /model: large
+  - /training: long
+  - /dataset: mass_action_3s_det
+  - /solver: deterministic
+  - /measurement: default
+
+experiment_name: mass_action_3s_det
+wandb_group: mass-action-3s-det
+
+training:
+  max_epochs: 500
+  batch_size: 256
+  n_ssa_samples: 1
+  checkpoint_every: 20
+
+model:
+  max_n_reactions: 7
+  context_dropout: 0.1
+  mlp_dropout: 0.1

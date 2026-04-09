@@ -1,0 +1,35 @@
+defaults:
+  - model: default
+  - training: default
+  - dataset: mass_action_3s
+  - solver: stochastic
+  - measurement: default
+  - optional experiment: null
+  - _self_
+
+experiment_name: unnamed
+wandb_project: crn-surrogate
+wandb_group: ""
+seed: 42
+device: auto
+
+# Generation-specific (only used by generate_dataset.py)
+generation:
+  checkpoint_every: 50
+  sim_timeout: 30
+  n_init_conditions: 1
+  use_fast_ssa: true
+  use_ode_prescreen: true
+  output_dir: experiments/datasets
+
+# Training-specific paths (only used by train.py)
+dataset_dir: experiments/datasets
+no_wandb: false
+wandb_artifact: null
+resume: null
+resume_weights_only: null
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

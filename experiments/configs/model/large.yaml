@@ -1,0 +1,9 @@
+d_model: 128
+n_encoder_layers: 3
+d_hidden: 256
+n_sde_hidden_layers: 3
+d_protocol: 0
+context_dropout: 0.1
+mlp_dropout: 0.1
+max_n_species: 3
+max_n_reactions: 6

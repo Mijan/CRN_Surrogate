@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+  - /model: large
+  - /training: long
+  - /dataset: mass_action_3s_large
+  - /solver: stochastic
+  - /measurement: default
+
+experiment_name: mass_action_3s_v8
+wandb_group: mass-action-3s
+
+solver:
+  use_log1p: true
+
+dataset:
+  n_train: 30000
+  n_val: 3000
+  n_ssa_trajectories: 32
+
+model:
+  context_dropout: 0.2
+  mlp_dropout: 0.2

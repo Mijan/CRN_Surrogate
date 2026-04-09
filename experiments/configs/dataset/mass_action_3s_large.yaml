@@ -1,0 +1,15 @@
+n_train: 50000
+n_val: 5000
+n_ssa_trajectories: 64
+t_max: 20.0
+n_time_points: 50
+initial_state_mean: 10.0
+initial_state_spread: 3.0
+
+topology:
+  n_species_range: [1, 3]
+  n_reactions_range: [2, 6]
+  max_reactant_order: 2
+  max_product_count: 2
+
+rate_constant_range: [0.01, 10.0]

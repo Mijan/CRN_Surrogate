@@ -1,24 +1,22 @@
 """Generate a CRN dataset and log it as a W&B artifact.
 
 Usage:
-    python experiments/scripts/generate_dataset.py [--config NAME]
-                                                   [--output-dir DIR]
-                                                   [--no-wandb]
-                                                   [--seed N]
-                                                   [--checkpoint-every N]
-                                                   [--resume PATH]
+    python experiments/scripts/generate_dataset.py                        # defaults
+    python experiments/scripts/generate_dataset.py experiment=mass_action_3s_v7
+    python experiments/scripts/generate_dataset.py dataset.n_train=100000 generation.sim_timeout=60
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 import warnings
 from collections.abc import Callable
 from pathlib import Path
 
+import hydra
 import torch
+from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -31,7 +29,7 @@ from crn_surrogate.data.generation.mass_action_generator import MassActionCRNGen
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from experiments.configs.registry import available_configs, get_config
+from experiments.builders import build_dataset_generator_config
 
 
 def _make_checkpoint_fn(
@@ -58,7 +56,6 @@ def _make_checkpoint_fn(
 
         if use_wandb:
             import wandb
-            # Log as a versioned artifact so it survives Colab disconnects
             artifact = wandb.Artifact(
                 name=f"{experiment_name}_{split_name}_checkpoint",
                 type="dataset-checkpoint",
@@ -151,7 +148,6 @@ def _simulate_ode(
 
         recorded[t_idx] = x
 
-    # Return as (1, T, n_species) to match TrajectoryItem format
     return torch.tensor(recorded, dtype=torch.float32).unsqueeze(0)
 
 
@@ -302,7 +298,6 @@ def _generate_split(
 
             stats["n_attempted"] += 1
 
-            # ODE pre-screen: reject boring dynamics before expensive SSA
             if ode_prescreen is not None:
                 prescreen_result = ode_prescreen.check(crn, init_state)
                 if not prescreen_result.accepted:
@@ -398,7 +393,7 @@ def _generate_split(
 
 
 def generate(
-    cfg,
+    cfg: DictConfig,
     output_dir: Path,
     *,
     use_wandb: bool,
@@ -415,7 +410,7 @@ def generate(
     """Run dataset generation and optionally log as a W&B artifact.
 
     Args:
-        cfg: Experiment configuration (must have a .dataset attribute).
+        cfg: Fully resolved Hydra config.
         output_dir: Directory to write dataset files.
         use_wandb: Whether to log an artifact to W&B.
         seed: Random seed for reproducibility.
@@ -438,15 +433,15 @@ def generate(
             group=cfg.wandb_group,
             job_type="data-generation",
             name=f"{cfg.experiment_name}_data",
-            config=cfg.to_dict(),
+            config=OmegaConf.to_container(cfg, resolve=True),
         )
 
-    gen = MassActionCRNGenerator(cfg.dataset.generator)
+    generator_config = build_dataset_generator_config(cfg)
+    gen = MassActionCRNGenerator(generator_config)
     ssa = GillespieSSA()
     time_grid = torch.linspace(0.0, cfg.dataset.t_max, cfg.dataset.n_time_points)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set up fast SSA if available and requested
     fast_ssa = None
     if use_fast_ssa:
         try:
@@ -548,7 +543,7 @@ def generate(
         "n_val": len(val_items),
         "train_meta": train_meta,
         "val_meta": val_meta,
-        "config": cfg.to_dict(),
+        "config": OmegaConf.to_container(cfg, resolve=True),
     }
     meta_path.write_text(json.dumps(metadata, indent=2, default=str))
     print(f"Saved: {train_path}, {val_path}, {meta_path}")
@@ -567,77 +562,28 @@ def generate(
         print(f"Logged W&B artifact: {cfg.experiment_name}_dataset")
 
 
-def main() -> None:
-    """Parse CLI args and run generation."""
-    parser = argparse.ArgumentParser(description="Generate a CRN dataset.")
-    parser.add_argument(
-        "--config",
-        default="mass_action_3s",
-        choices=available_configs(),
-        help="Experiment config name",
-    )
-    parser.add_argument("--output-dir", default="experiments/datasets")
-    parser.add_argument("--no-wandb", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--checkpoint-every",
-        type=int,
-        default=50,
-        help="Save intermediate dataset every N accepted items (0 to disable)",
-    )
-    parser.add_argument(
-        "--resume-train",
-        default=None,
-        help="Path to a training split checkpoint .pt file to resume from",
-    )
-    parser.add_argument(
-        "--resume-val",
-        default=None,
-        help="Path to a validation split checkpoint .pt file to resume from",
-    )
-    parser.add_argument(
-        "--sim-timeout",
-        type=int,
-        default=30,
-        help="Per-CRN SSA simulation timeout in seconds (0 to disable)",
-    )
-    parser.add_argument(
-        "--n-init-conditions",
-        type=int,
-        default=1,
-        help="Number of distinct initial conditions per CRN (trajectories split across them)",
-    )
-    parser.add_argument(
-        "--no-fast-ssa",
-        action="store_true",
-        help="Disable Numba-accelerated SSA (use standard GillespieSSA)",
-    )
-    parser.add_argument(
-        "--no-ode-prescreen",
-        action="store_true",
-        help="Disable ODE pre-screening (accept all topologies)",
-    )
-    parser.add_argument(
-        "--deterministic",
-        action="store_true",
-        help="Generate deterministic ODE trajectories instead of stochastic SSA",
-    )
-    args = parser.parse_args()
+@hydra.main(
+    version_base=None,
+    config_path="../configs",
+    config_name="config",
+)
+def main(cfg: DictConfig) -> None:
+    """Hydra entry point for dataset generation."""
+    torch.manual_seed(cfg.seed)
+    gen_cfg = cfg.generation
+    use_wandb = not cfg.no_wandb
 
-    cfg = get_config(args.config)
     generate(
         cfg,
-        output_dir=Path(args.output_dir),
-        use_wandb=not args.no_wandb,
-        seed=args.seed,
-        checkpoint_every=args.checkpoint_every,
-        sim_timeout=args.sim_timeout,
-        n_init_conditions=args.n_init_conditions,
-        use_fast_ssa=not args.no_fast_ssa,
-        use_ode_prescreen=not args.no_ode_prescreen,
-        resume_train=Path(args.resume_train) if args.resume_train else None,
-        resume_val=Path(args.resume_val) if args.resume_val else None,
-        deterministic=args.deterministic,
+        output_dir=Path(gen_cfg.output_dir),
+        use_wandb=use_wandb,
+        seed=cfg.seed,
+        checkpoint_every=gen_cfg.checkpoint_every,
+        sim_timeout=gen_cfg.sim_timeout,
+        n_init_conditions=gen_cfg.n_init_conditions,
+        use_fast_ssa=gen_cfg.use_fast_ssa,
+        use_ode_prescreen=gen_cfg.use_ode_prescreen,
+        deterministic=cfg.solver.deterministic,
     )
 
 

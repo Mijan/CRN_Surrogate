@@ -1,46 +1,47 @@
 """Train the CRN surrogate on a generated dataset.
 
 Usage:
-    python experiments/scripts/train.py [--config NAME]
-                                        [--dataset-dir DIR]
-                                        [--device auto|cpu|cuda|mps]
-                                        [--no-wandb]
-                                        [--seed N]
-                                        [--max-epochs N]
-                                        [--wandb-artifact ARTIFACT_REF]
-                                        [--resume PATH|ARTIFACT_REF|auto]
+    python experiments/scripts/train.py                          # defaults
+    python experiments/scripts/train.py experiment=mass_action_3s_v5
+    python experiments/scripts/train.py training.lr=5e-4 model.d_model=256
+    python experiments/scripts/train.py experiment=mass_action_3s_det device=cuda
 """
 
 from __future__ import annotations
 
-import argparse
-import dataclasses
 import sys
 from pathlib import Path
 
+import hydra
 import torch
+from omegaconf import DictConfig, OmegaConf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.training.trainer import Trainer
-from experiments.configs.registry import available_configs, get_config
+from experiments.builders import (
+    build_model,
+    build_model_config,
+    build_simulator,
+    build_training_config,
+    select_device,
+)
 
 
 def _resolve_checkpoint(
     resume_arg: str,
-    cfg,
+    cfg: DictConfig,
     device: torch.device,
     use_wandb: bool,
 ) -> dict | None:
-    """Resolve a --resume argument to a loaded checkpoint dict.
+    """Resolve a resume argument to a loaded checkpoint dict.
+
+    Accepts a local path, a W&B artifact reference, or 'auto'.
 
     Args:
-        resume_arg: One of:
-            - "auto": search W&B for the latest checkpoint artifact
-            - A W&B artifact reference (contains ":" or "/")
-            - A local file path
-        cfg: Experiment config (for constructing artifact names).
+        resume_arg: One of 'auto', a W&B artifact reference, or a local path.
+        cfg: Fully resolved Hydra config.
         device: Device to load tensors onto.
         use_wandb: Whether W&B is available.
 
@@ -56,19 +57,17 @@ def _resolve_checkpoint(
         import wandb
 
         if resume_arg == "auto":
-            # Prefer best-validation checkpoint; fall back to periodic checkpoint
             candidates = [
-                # f"{cfg.wandb_project}/{cfg.experiment_name}_train_model_checkpoint:latest",
                 f"{cfg.wandb_project}/{cfg.experiment_name}_train_periodic_checkpoint:latest",
             ]
-            ckpt_path = None
             for artifact_ref in candidates:
                 try:
-                    if wandb.run is not None:
-                        artifact = wandb.run.use_artifact(artifact_ref)
-                    else:
-                        api = wandb.Api()
-                        artifact = api.artifact(artifact_ref)
+                    api = wandb.Api() if wandb.run is None else None
+                    artifact = (
+                        wandb.run.use_artifact(artifact_ref)
+                        if wandb.run is not None
+                        else api.artifact(artifact_ref)
+                    )
                     artifact_dir = Path(artifact.download())
                     ckpt_files = sorted(artifact_dir.glob("*.pt"))
                     if ckpt_files:
@@ -81,21 +80,20 @@ def _resolve_checkpoint(
                 print("No checkpoint artifact found. Starting fresh.")
                 return None
         else:
-            artifact_ref = resume_arg
             try:
-                if wandb.run is not None:
-                    artifact = wandb.run.use_artifact(artifact_ref)
-                else:
-                    api = wandb.Api()
-                    artifact = api.artifact(artifact_ref)
+                api = wandb.Api() if wandb.run is None else None
+                artifact = (
+                    wandb.run.use_artifact(resume_arg)
+                    if wandb.run is not None
+                    else api.artifact(resume_arg)
+                )
                 artifact_dir = Path(artifact.download())
                 ckpt_files = sorted(artifact_dir.glob("*.pt"))
                 if not ckpt_files:
-                    print(f"No .pt files in artifact {artifact_ref}")
+                    print(f"No .pt files in artifact {resume_arg}")
                     return None
                 ckpt_path = ckpt_files[-1]
-                print(f"Resume (artifact): {artifact_ref} -> {ckpt_path.name}")
-            except Exception as exc:  # wandb.errors.CommError or similar
+            except Exception as exc:
                 print(f"No checkpoint artifact found ({exc}). Starting fresh.")
                 return None
     else:
@@ -103,85 +101,32 @@ def _resolve_checkpoint(
         if not ckpt_path.exists():
             print(f"Checkpoint not found: {ckpt_path}. Starting fresh.")
             return None
-        print(f"Resume from local: {ckpt_path}")
 
     return torch.load(ckpt_path, map_location=device, weights_only=False)
 
 
-def _select_device(device_arg: str) -> torch.device:
-    """Resolve device string to a torch.device.
+@hydra.main(
+    version_base=None,
+    config_path="../configs",
+    config_name="config",
+)
+def main(cfg: DictConfig) -> None:
+    """Hydra entry point for training."""
+    print(OmegaConf.to_yaml(cfg))
+    torch.manual_seed(cfg.seed)
 
-    Args:
-        device_arg: One of "auto", "cpu", "cuda", "mps".
-
-    Returns:
-        Selected torch.device.
-    """
-    if device_arg != "auto":
-        return torch.device(device_arg)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def main() -> None:
-    """Parse CLI args and run training."""
-    parser = argparse.ArgumentParser(description="Train the CRN surrogate model.")
-    parser.add_argument(
-        "--config",
-        default="mass_action_3s",
-        choices=available_configs(),
-        help="Experiment config name",
-    )
-    parser.add_argument("--dataset-dir", default="experiments/datasets")
-    parser.add_argument(
-        "--device", default="auto", choices=["auto", "cpu", "cuda", "mps"]
-    )
-    parser.add_argument("--no-wandb", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max-epochs", type=int, default=None)
-    parser.add_argument(
-        "--wandb-artifact",
-        default=None,
-        help="W&B artifact reference (e.g. 'mass_action_3s_v1_dataset:latest')",
-    )
-    parser.add_argument(
-        "--resume",
-        default=None,
-        help=(
-            "Resume from a checkpoint. Accepts: "
-            "(1) local path to a .pt file, "
-            "(2) W&B artifact reference (e.g. 'mass_action_3s_v3_train_checkpoint:latest'), "
-            "(3) 'auto' to automatically find the latest W&B checkpoint for this experiment"
-        ),
-    )
-    parser.add_argument(
-        "--resume-weights-only",
-        default=None,
-        help=(
-            "Load model weights from a checkpoint but start training fresh "
-            "(new optimizer, scheduler, epoch counter). Accepts the same values "
-            "as --resume: local path, W&B artifact reference, or 'auto'."
-        ),
-    )
-    args = parser.parse_args()
-
-    if args.resume and args.resume_weights_only:
-        print("Error: --resume and --resume-weights-only are mutually exclusive.")
-        sys.exit(1)
-
-    cfg = get_config(args.config)
-    torch.manual_seed(args.seed)
-
-    device = _select_device(args.device)
+    device = select_device(cfg.device)
     print(f"Device: {device}")
 
-    use_wandb = not args.no_wandb
+    use_wandb = not cfg.no_wandb
 
-    # ── Load dataset ─────────────────────────────────────────────────────────
-    if args.wandb_artifact and use_wandb:
+    # ── Load dataset ─────────────────────────────────────────────────────
+    dataset_dir = Path(cfg.dataset_dir)
+    train_files = sorted(dataset_dir.glob("*_train.pt"))
+    val_files = sorted(dataset_dir.glob("*_val.pt"))
+
+    wandb_artifact = cfg.wandb_artifact
+    if wandb_artifact and use_wandb:
         import wandb
 
         run = wandb.init(
@@ -189,82 +134,74 @@ def main() -> None:
             group=cfg.wandb_group,
             job_type="training",
             name=f"{cfg.experiment_name}_train",
-            config=cfg.to_dict(),
+            config=OmegaConf.to_container(cfg, resolve=True),
         )
-        artifact = run.use_artifact(args.wandb_artifact)
-        artifact_dir = artifact.download()
-        artifact_path = Path(artifact_dir)
+        artifact = run.use_artifact(wandb_artifact)
+        artifact_path = Path(artifact.download())
         train_files = sorted(artifact_path.glob("*_train.pt"))
         val_files = sorted(artifact_path.glob("*_val.pt"))
-        if not train_files or not val_files:
-            raise FileNotFoundError(
-                f"Expected *_train.pt and *_val.pt in {artifact_path}, "
-                f"found: {list(artifact_path.iterdir())}"
-            )
-        train_dataset = torch.load(train_files[0], weights_only=False)
-        val_dataset = torch.load(val_files[0], weights_only=False)
-    else:
-        dataset_dir = Path(args.dataset_dir)
-        train_files = sorted(dataset_dir.glob("*_train.pt"))
-        val_files = sorted(dataset_dir.glob("*_val.pt"))
-        if not train_files or not val_files:
-            raise FileNotFoundError(
-                f"Expected *_train.pt and *_val.pt in {dataset_dir}, "
-                f"found: {list(dataset_dir.iterdir())}"
-            )
-        train_dataset = torch.load(train_files[0], weights_only=False)
-        val_dataset = torch.load(val_files[0], weights_only=False)
-        if use_wandb:
-            import wandb
 
-            run = wandb.init(
-                project=cfg.wandb_project,
-                group=cfg.wandb_group,
-                job_type="training",
-                name=f"{cfg.experiment_name}_train",
-                config=cfg.to_dict(),
-            )
+    if not train_files or not val_files:
+        search_dir = dataset_dir if not wandb_artifact else artifact_path
+        raise FileNotFoundError(
+            f"Expected *_train.pt and *_val.pt in {search_dir}"
+        )
+
+    train_dataset = torch.load(train_files[0], weights_only=False)
+    val_dataset = torch.load(val_files[0], weights_only=False)
+
+    if use_wandb and not wandb_artifact:
+        import wandb
+
+        run = wandb.init(
+            project=cfg.wandb_project,
+            group=cfg.wandb_group,
+            job_type="training",
+            name=f"{cfg.experiment_name}_train",
+            config=OmegaConf.to_container(cfg, resolve=True),
+        )
 
     print(f"Train: {len(train_dataset)} items | Val: {len(val_dataset)} items")
 
-    # ── Build model ──────────────────────────────────────────────────────────
-    model_config = cfg.build_model_config()
+    # ── Build model ──────────────────────────────────────────────────────
+    model_config = build_model_config(cfg)
     encoder = BipartiteGNNEncoder(model_config.encoder).to(device)
-    model = cfg.build_model(device)
-    simulator = cfg.build_simulator()
-
-    train_config = cfg.build_training_config(use_wandb=use_wandb)
-    if args.max_epochs is not None:
-        train_config = dataclasses.replace(train_config, max_epochs=args.max_epochs)
+    model = build_model(cfg, device)
+    simulator = build_simulator(cfg)
+    train_config = build_training_config(cfg, use_wandb=use_wandb)
 
     print(f"Encoder params: {sum(p.numel() for p in encoder.parameters()):,}")
     print(f"Model params:   {sum(p.numel() for p in model.parameters()):,}")
 
-    # ── Resume from checkpoint if requested ──────────────────────────────────
+    # ── Resume ───────────────────────────────────────────────────────────
     trainer = Trainer(encoder, model, model_config, train_config, simulator=simulator)
     start_epoch = 1
-    if args.resume_weights_only:
-        checkpoint = _resolve_checkpoint(args.resume_weights_only, cfg, device, use_wandb)
+
+    resume = cfg.resume
+    resume_weights_only = cfg.resume_weights_only
+
+    if resume and resume_weights_only:
+        raise ValueError("resume and resume_weights_only are mutually exclusive.")
+
+    if resume_weights_only:
+        checkpoint = _resolve_checkpoint(resume_weights_only, cfg, device, use_wandb)
         if checkpoint is not None:
             encoder.load_state_dict(checkpoint["encoder_state"])
             model.load_state_dict(checkpoint["model_state"])
             start_epoch = checkpoint.get("epoch", 0) + 1
-            print(f"Loaded model weights from checkpoint. Starting fresh training from epoch {start_epoch} with config LR={train_config.lr}, scheduler={train_config.scheduler_type}")
-        else:
-            print("No checkpoint loaded. Starting from scratch.")
-    if args.resume:
-        checkpoint = _resolve_checkpoint(args.resume, cfg, device, use_wandb)
+            print(f"Loaded weights. Fresh training from epoch {start_epoch}.")
+
+    if resume:
+        checkpoint = _resolve_checkpoint(resume, cfg, device, use_wandb)
         if checkpoint is not None:
             start_epoch = trainer.load_checkpoint(checkpoint)
-            print(f"Will resume training from epoch {start_epoch}")
-        else:
-            print("No checkpoint loaded. Starting from scratch.")
+            print(f"Resuming from epoch {start_epoch}")
 
-    # ── Train ────────────────────────────────────────────────────────────────
+    # ── Train ────────────────────────────────────────────────────────────
     Path(train_config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
     result = trainer.train(train_dataset, val_dataset, start_epoch=start_epoch)
 
-    # ── Save checkpoint as W&B artifact ──────────────────────────────────────
+    # ── Final artifact ───────────────────────────────────────────────────
     if use_wandb:
         ckpt_path = Path(train_config.checkpoint_dir) / "final.pt"
         ckpt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -272,12 +209,14 @@ def main() -> None:
             {
                 "encoder_state": encoder.state_dict(),
                 "model_state": model.state_dict(),
-                "config": cfg.to_dict(),
+                "config": OmegaConf.to_container(cfg, resolve=True),
                 "train_losses": result.train_losses,
                 "val_losses": result.val_losses,
             },
             ckpt_path,
         )
+        import wandb
+
         artifact = wandb.Artifact(
             name=f"{cfg.experiment_name}_model",
             type="model",
