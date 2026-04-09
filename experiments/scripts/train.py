@@ -53,8 +53,8 @@ def main(cfg: DictConfig) -> None:
         enabled=use_wandb,
     ) as session:
         # Data
-        loader = DatasetLoader(cfg.dataset_dir)
-        train_data, val_data = loader.load(cfg.wandb_artifact)
+        loader = DatasetLoader(cfg.run.dataset_dir)
+        train_data, val_data = loader.load(cfg.run.wandb_artifact)
 
         # Model
         model_config = build_model_config(cfg)
@@ -117,8 +117,8 @@ def _handle_resume(
     Raises:
         ValueError: If both resume and resume_weights_only are set.
     """
-    resume = cfg.resume
-    resume_weights = cfg.resume_weights_only
+    resume = cfg.run.resume
+    resume_weights = cfg.run.resume_weights_only
 
     if resume and resume_weights:
         raise ValueError("resume and resume_weights_only are mutually exclusive.")
