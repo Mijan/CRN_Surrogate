@@ -1,9 +1,9 @@
-"""Generate a CRN dataset and log it as a W&B artifact.
+"""Generate a CRN dataset.
 
 Usage:
-    python experiments/scripts/generate_dataset.py                        # defaults
+    python experiments/scripts/generate_dataset.py
     python experiments/scripts/generate_dataset.py experiment=mass_action_3s_v7
-    python experiments/scripts/generate_dataset.py dataset.n_train=100000 generation.sim_timeout=60
+    python experiments/scripts/generate_dataset.py dataset.n_train=100000
 """
 
 from __future__ import annotations
@@ -30,13 +30,14 @@ from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
 from experiments.builders import build_dataset_generator_config
+from experiments.wandb_session import WandbSession
 
 
 def _make_checkpoint_fn(
     output_dir: Path,
     experiment_name: str,
     split_name: str,
-    use_wandb: bool,
+    session: WandbSession,
 ) -> Callable[[list[TrajectoryItem], str], None]:
     """Create a checkpoint callback that saves intermediate items to disk.
 
@@ -44,7 +45,7 @@ def _make_checkpoint_fn(
         output_dir: Directory to write checkpoint files.
         experiment_name: Used as filename prefix.
         split_name: "train" or "val".
-        use_wandb: Whether to log checkpoint progress to W&B.
+        session: Active WandbSession for logging (no-op if inactive).
 
     Returns:
         Callable that accepts (items, label) and saves a CRNTrajectoryDataset.
@@ -53,17 +54,13 @@ def _make_checkpoint_fn(
         path = output_dir / f"{experiment_name}_{split_name}_{label}.pt"
         torch.save(CRNTrajectoryDataset(items), path)
         print(f"  Checkpoint: {len(items)} items -> {path.name}")
-
-        if use_wandb:
-            import wandb
-            artifact = wandb.Artifact(
-                name=f"{experiment_name}_{split_name}_checkpoint",
-                type="dataset-checkpoint",
-                metadata={"n_items": len(items), "label": label},
-            )
-            artifact.add_file(str(path))
-            wandb.log_artifact(artifact)
-            wandb.log({f"data/{split_name}_items": len(items)})
+        session.log_artifact(
+            f"{experiment_name}_{split_name}_checkpoint",
+            "dataset-checkpoint",
+            path,
+            metadata={"n_items": len(items), "label": label},
+        )
+        session.log({f"data/{split_name}_items": len(items)})
 
     return _checkpoint
 
@@ -236,7 +233,7 @@ def _generate_split(
     t_max: float,
     sim_timeout: int = 30,
     n_init_conditions: int = 1,
-    use_wandb: bool = False,
+    session: WandbSession,
     checkpoint_fn: Callable[[list[TrajectoryItem], str], None] | None = None,
     checkpoint_every: int = 50,
     resume_items: list[TrajectoryItem] | None = None,
@@ -256,7 +253,7 @@ def _generate_split(
         t_max: Simulation end time.
         sim_timeout: Per-CRN wall-clock timeout in seconds (0 to disable).
         n_init_conditions: Number of distinct initial conditions per CRN topology.
-        use_wandb: Whether to log progress metrics to W&B.
+        session: WandbSession for logging progress metrics.
         checkpoint_fn: Optional callback called every checkpoint_every items.
         checkpoint_every: Checkpoint interval in number of accepted items.
         resume_items: Pre-existing items to resume from.
@@ -350,9 +347,8 @@ def _generate_split(
                 species=ns,
             )
 
-            if use_wandb and len(items) % 10 == 0:
-                import wandb
-                wandb.log({
+            if session.active and len(items) % 10 == 0:
+                session.log({
                     "data/items_generated": len(items),
                     "data/attempts": stats["n_attempted"],
                     "data/pass_rate": stats["n_curated_pass"] / stats["n_attempted"],
@@ -394,9 +390,9 @@ def _generate_split(
 
 def generate(
     cfg: DictConfig,
-    output_dir: Path,
     *,
-    use_wandb: bool,
+    session: WandbSession,
+    output_dir: Path,
     seed: int,
     checkpoint_every: int,
     sim_timeout: int = 30,
@@ -407,12 +403,12 @@ def generate(
     resume_val: Path | None = None,
     deterministic: bool = False,
 ) -> None:
-    """Run dataset generation and optionally log as a W&B artifact.
+    """Run dataset generation and log as a W&B artifact via the session.
 
     Args:
         cfg: Fully resolved Hydra config.
+        session: WandbSession for artifact logging (no-op if inactive).
         output_dir: Directory to write dataset files.
-        use_wandb: Whether to log an artifact to W&B.
         seed: Random seed for reproducibility.
         checkpoint_every: Save intermediate dataset every N accepted items.
         sim_timeout: Per-CRN wall-clock timeout in seconds (0 to disable).
@@ -425,16 +421,6 @@ def generate(
             of stochastic SSA (M=1 per item).
     """
     torch.manual_seed(seed)
-
-    if use_wandb:
-        import wandb
-        run = wandb.init(
-            project=cfg.wandb_project,
-            group=cfg.wandb_group,
-            job_type="data-generation",
-            name=f"{cfg.experiment_name}_data",
-            config=OmegaConf.to_container(cfg, resolve=True),
-        )
 
     generator_config = build_dataset_generator_config(cfg)
     gen = MassActionCRNGenerator(generator_config)
@@ -505,8 +491,8 @@ def generate(
         t_max=cfg.dataset.t_max,
         sim_timeout=sim_timeout,
         n_init_conditions=n_init_conditions,
-        use_wandb=use_wandb,
-        checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "train", use_wandb),
+        session=session,
+        checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "train", session),
         checkpoint_every=checkpoint_every,
         resume_items=resume_train_items,
         ode_prescreen=ode_prescreen,
@@ -522,8 +508,8 @@ def generate(
         t_max=cfg.dataset.t_max,
         sim_timeout=sim_timeout,
         n_init_conditions=n_init_conditions,
-        use_wandb=use_wandb,
-        checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "val", use_wandb),
+        session=session,
+        checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "val", session),
         checkpoint_every=checkpoint_every,
         resume_items=resume_val_items,
         ode_prescreen=ode_prescreen,
@@ -548,43 +534,46 @@ def generate(
     meta_path.write_text(json.dumps(metadata, indent=2, default=str))
     print(f"Saved: {train_path}, {val_path}, {meta_path}")
 
-    if use_wandb:
-        artifact = wandb.Artifact(
-            name=f"{cfg.experiment_name}_dataset",
-            type="dataset",
-            metadata=metadata,
-        )
-        artifact.add_file(str(train_path))
-        artifact.add_file(str(val_path))
-        artifact.add_file(str(meta_path))
-        run.log_artifact(artifact)
-        run.finish()
+    session.log_multi_file_artifact(
+        f"{cfg.experiment_name}_dataset",
+        "dataset",
+        [train_path, val_path, meta_path],
+        metadata=metadata,
+    )
+    if session.active:
         print(f"Logged W&B artifact: {cfg.experiment_name}_dataset")
 
 
-@hydra.main(
-    version_base=None,
-    config_path="../configs",
-    config_name="config",
-)
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     """Hydra entry point for dataset generation."""
+    print(OmegaConf.to_yaml(cfg))
     torch.manual_seed(cfg.seed)
+
     gen_cfg = cfg.generation
     use_wandb = not cfg.no_wandb
+    flat_config = OmegaConf.to_container(cfg, resolve=True)
 
-    generate(
-        cfg,
-        output_dir=Path(gen_cfg.output_dir),
-        use_wandb=use_wandb,
-        seed=cfg.seed,
-        checkpoint_every=gen_cfg.checkpoint_every,
-        sim_timeout=gen_cfg.sim_timeout,
-        n_init_conditions=gen_cfg.n_init_conditions,
-        use_fast_ssa=gen_cfg.use_fast_ssa,
-        use_ode_prescreen=gen_cfg.use_ode_prescreen,
-        deterministic=cfg.solver.deterministic,
-    )
+    with WandbSession(
+        project=cfg.wandb_project,
+        name=f"{cfg.experiment_name}_data",
+        group=cfg.wandb_group,
+        job_type="data-generation",
+        config=flat_config,
+        enabled=use_wandb,
+    ) as session:
+        generate(
+            cfg,
+            session=session,
+            output_dir=Path(gen_cfg.output_dir),
+            seed=cfg.seed,
+            checkpoint_every=gen_cfg.checkpoint_every,
+            sim_timeout=gen_cfg.sim_timeout,
+            n_init_conditions=gen_cfg.n_init_conditions,
+            use_fast_ssa=gen_cfg.use_fast_ssa,
+            use_ode_prescreen=gen_cfg.use_ode_prescreen,
+            deterministic=cfg.solver.deterministic,
+        )
 
 
 if __name__ == "__main__":
