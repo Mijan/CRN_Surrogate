@@ -47,7 +47,9 @@ def _load_preset(name: str | None):
                 if isinstance(entry, str):
                     continue
                 for group, variant in entry.items():
-                    groups[group.lstrip("/")] = variant
+                    # Strip Hydra "override " prefix and leading slash
+                    key = group.removeprefix("override ").lstrip("/")
+                    groups[key] = variant
 
     cfg = OmegaConf.merge(
         base,
