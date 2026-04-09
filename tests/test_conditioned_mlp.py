@@ -143,9 +143,7 @@ def test_film_layer_different_contexts_produce_different_outputs():
 
 def test_sde_different_contexts_produce_different_drift():
     """Two different CRN contexts must produce different drift vectors for the same state."""
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=2), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=2), n_species=1)
     ctx_a = _make_context()
     ctx_b = _make_context()
     state = torch.tensor([5.0])
@@ -160,9 +158,7 @@ def test_sde_different_contexts_produce_different_drift():
 
 def test_sde_different_contexts_produce_different_diffusion():
     """Two different CRN contexts must produce different diffusion matrices."""
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=2), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=2), n_species=1)
     ctx_a = _make_context()
     ctx_b = _make_context()
     state = torch.tensor([5.0])

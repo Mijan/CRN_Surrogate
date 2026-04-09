@@ -52,14 +52,28 @@ def _load_preset(name: str | None):
     cfg = OmegaConf.merge(
         base,
         {"model": OmegaConf.load(CONFIGS_DIR / "model" / f"{groups['model']}.yaml")},
-        {"training": OmegaConf.load(CONFIGS_DIR / "training" / f"{groups['training']}.yaml")},
-        {"dataset": OmegaConf.load(CONFIGS_DIR / "dataset" / f"{groups['dataset']}.yaml")},
+        {
+            "training": OmegaConf.load(
+                CONFIGS_DIR / "training" / f"{groups['training']}.yaml"
+            )
+        },
+        {
+            "dataset": OmegaConf.load(
+                CONFIGS_DIR / "dataset" / f"{groups['dataset']}.yaml"
+            )
+        },
         {"solver": OmegaConf.load(CONFIGS_DIR / "solver" / f"{groups['solver']}.yaml")},
-        {"measurement": OmegaConf.load(CONFIGS_DIR / "measurement" / f"{groups['measurement']}.yaml")},
+        {
+            "measurement": OmegaConf.load(
+                CONFIGS_DIR / "measurement" / f"{groups['measurement']}.yaml"
+            )
+        },
     )
 
     if name is not None:
-        preset = OmegaConf.masked_copy(preset_raw, [k for k in preset_raw if k != "defaults"])
+        preset = OmegaConf.masked_copy(
+            preset_raw, [k for k in preset_raw if k != "defaults"]
+        )
         cfg = OmegaConf.merge(cfg, preset)
 
     return cfg

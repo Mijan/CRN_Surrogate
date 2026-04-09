@@ -54,7 +54,7 @@ class SSASimulator(DataSimulator):
 
     def __init__(self, timeout: int = 30) -> None:
         """Args:
-            timeout: Per-CRN wall-clock timeout in seconds. 0 disables.
+        timeout: Per-CRN wall-clock timeout in seconds. 0 disables.
         """
         self._ssa = GillespieSSA()
         self._timeout = timeout
@@ -124,6 +124,7 @@ class FastSSASimulator(DataSimulator):
             ImportError: If numba is not available.
         """
         import numpy as np
+
         from crn_surrogate.simulation.fast_ssa import (
             NUMBA_AVAILABLE,
             FastMassActionSSA,
@@ -143,7 +144,9 @@ class FastSSASimulator(DataSimulator):
             np.zeros((2, 1), dtype=np.float64),
             np.ones(2, dtype=np.float64),
             np.array([1.0], dtype=np.float64),
-            1.0, 100, 42,
+            1.0,
+            100,
+            42,
         )
 
     def simulate(
@@ -216,8 +219,8 @@ class ODESimulator(DataSimulator):
         blowup_threshold: float = 1e5,
     ) -> None:
         """Args:
-            n_substeps: Euler substeps between consecutive time grid points.
-            blowup_threshold: Abort and return None if any state exceeds this.
+        n_substeps: Euler substeps between consecutive time grid points.
+        blowup_threshold: Abort and return None if any state exceeds this.
         """
         self._ode = MassActionODE(
             n_substeps=n_substeps,

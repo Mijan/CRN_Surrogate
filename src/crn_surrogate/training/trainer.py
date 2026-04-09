@@ -334,7 +334,9 @@ class Trainer:
             with self._timer.time("backward"):
                 loss.backward()
             # clip_grad_norm_ returns the pre-clipping total norm — free diagnostic
-            all_params = list(self._encoder.parameters()) + list(self._model.parameters())
+            all_params = list(self._encoder.parameters()) + list(
+                self._model.parameters()
+            )
             if self._measurement_model is not None:
                 all_params += list(self._measurement_model.parameters())
             total_norm = nn.utils.clip_grad_norm_(

@@ -38,9 +38,7 @@ def _make_context(crn, d_model: int = 16):
 def test_drift_output_shape_equals_n_species():
     """drift() must return a vector of length n_species."""
     ctx = _make_context(birth_death())
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1)
     drift = sde.drift(torch.tensor(0.0), torch.tensor([5.0]), ctx)
     assert drift.shape == (1,)
 
@@ -59,9 +57,7 @@ def test_diffusion_output_shape_is_n_species_by_n_noise():
 def test_diffusion_values_are_nonnegative():
     """The diffusion matrix uses softplus, so all entries must be >= 0."""
     ctx = _make_context(birth_death())
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1)
     diff = sde.diffusion(torch.tensor(0.0), torch.randn(1), ctx)
     assert (diff >= 0).all()
 
@@ -72,9 +68,7 @@ def test_diffusion_values_are_nonnegative():
 def test_solver_trajectory_shape_matches_time_grid():
     """Solved trajectory must have one state per time-grid point."""
     ctx = _make_context(birth_death())
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1)
     solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 5.0, 12)
     traj = solver.solve(sde, torch.tensor([5.0]), ctx, t_span, dt=0.1)
@@ -119,9 +113,7 @@ def test_solver_without_clip_state_clip_min_geq_noclip_min():
 def test_solver_lotka_volterra_two_species_trajectory_shape():
     """Solver must handle 2-species CRNs and return (T, 2) state trajectories."""
     ctx = _make_context(lotka_volterra(), d_model=16)
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=8), n_species=2
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=8), n_species=2)
     solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 5.0, 10)
     traj = solver.solve(sde, torch.tensor([10.0, 5.0]), ctx, t_span, dt=0.1)
@@ -134,9 +126,7 @@ def test_solver_lotka_volterra_two_species_trajectory_shape():
 def test_solver_gradients_flow_through_trajectory_to_sde_parameters():
     """A loss on the solved trajectory must propagate gradients to the SDE parameters."""
     ctx = _make_context(birth_death())
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1)
     solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 2.0, 5)
     traj = solver.solve(sde, torch.tensor([5.0]), ctx, t_span, dt=0.1)
@@ -200,9 +190,7 @@ def test_sde_different_protocol_embeddings_produce_different_outputs():
 def test_solver_with_no_protocol_matches_pre_phase2():
     """EulerMaruyamaSolver with no protocol args produces trajectory of correct shape."""
     ctx = _make_context(birth_death())
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1)
     solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0.0, 5.0, 20)
     traj = solver.solve(sde, torch.tensor([0.0]), ctx, t_span, dt=0.1)
@@ -251,9 +239,7 @@ def test_solver_with_input_protocol_clamps_external_species():
     protocol = InputProtocol(schedules={1: sched})
     ext_mask = torch.tensor([False, True])
 
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=2
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=2)
     solver = EulerMaruyamaSolver(SolverConfig(clip_state=True))
     t_span = torch.linspace(0.0, 10.0, 50)
     resolved = ResolvedProtocol(
@@ -278,9 +264,7 @@ def test_solver_with_input_protocol_clamps_external_species():
 def test_solver_with_resolved_protocol_none_works():
     """EulerMaruyamaSolver with resolved_protocol=None produces a trajectory normally."""
     ctx = _make_context(birth_death())
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=1)
     solver = EulerMaruyamaSolver(SolverConfig())
     t_span = torch.linspace(0, 5, 10)
     traj = solver.solve(
@@ -301,7 +285,9 @@ def test_neural_drift_is_surrogate_model_not_stochastic():
 
 def test_neural_sde_is_both_surrogate_and_stochastic():
     """NeuralSDE must be both SurrogateModel and StochasticSurrogate."""
-    model = NeuralSDE(SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=3)
+    model = NeuralSDE(
+        SDEConfig(d_model=16, d_hidden=32, n_noise_channels=4), n_species=3
+    )
     assert isinstance(model, SurrogateModel)
     assert isinstance(model, StochasticSurrogate)
 
@@ -329,5 +315,3 @@ def test_neural_drift_drift_output_shape():
     model = NeuralDrift(SDEConfig(d_model=16, d_hidden=32), n_species=1)
     drift = model.drift(torch.tensor(0.0), torch.tensor([5.0]), ctx)
     assert drift.shape == (1,)
-
-

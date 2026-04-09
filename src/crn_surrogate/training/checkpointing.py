@@ -142,7 +142,6 @@ class CheckpointManager:
         if "best_val_loss" in checkpoint:
             self._best_val_loss = checkpoint["best_val_loss"]
 
-
         epoch = checkpoint.get("epoch", 0)
         print(f"Resumed from epoch {epoch} (best_val_loss={self._best_val_loss:.4f})")
         return epoch + 1

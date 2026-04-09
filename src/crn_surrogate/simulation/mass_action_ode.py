@@ -24,8 +24,8 @@ class MassActionODE:
         blowup_threshold: float = 1e5,
     ) -> None:
         """Args:
-            n_substeps: Euler substeps between consecutive time grid points.
-            blowup_threshold: Abort and return None if any state exceeds this.
+        n_substeps: Euler substeps between consecutive time grid points.
+        blowup_threshold: Abort and return None if any state exceeds this.
         """
         self._n_substeps = n_substeps
         self._blowup_threshold = blowup_threshold

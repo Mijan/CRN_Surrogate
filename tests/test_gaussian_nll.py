@@ -15,11 +15,11 @@ import torch
 import torch.nn as nn
 
 from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
+from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.configs.training_config import TrainingConfig, TrainingMode
 from crn_surrogate.data.generation.reference_crns import birth_death
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
-from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.simulator.neural_sde import NeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.losses import GaussianTransitionNLL
@@ -261,9 +261,7 @@ def test_gaussian_nll_lower_at_true_parameters_than_perturbed():
 
 def _make_trainer(training_mode: TrainingMode) -> Trainer:
     encoder = BipartiteGNNEncoder(EncoderConfig(d_model=16, n_layers=1))
-    sde = NeuralSDE(
-        SDEConfig(d_model=16, d_hidden=16, n_noise_channels=2), n_species=1
-    )
+    sde = NeuralSDE(SDEConfig(d_model=16, d_hidden=16, n_noise_channels=2), n_species=1)
     from crn_surrogate.configs.model_config import ModelConfig
 
     model_config = ModelConfig(
@@ -277,7 +275,13 @@ def _make_trainer(training_mode: TrainingMode) -> Trainer:
         max_epochs=30,
         use_wandb=False,
     )
-    return Trainer(encoder, sde, model_config, train_config, simulator=EulerMaruyamaSolver(SolverConfig()))
+    return Trainer(
+        encoder,
+        sde,
+        model_config,
+        train_config,
+        simulator=EulerMaruyamaSolver(SolverConfig()),
+    )
 
 
 def test_effective_mode_teacher_forcing_always_returns_teacher_forcing():

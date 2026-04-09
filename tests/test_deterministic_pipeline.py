@@ -70,10 +70,10 @@ class TestDeterministicSolver:
     def solver_setup(self):
         """Create a minimal SDE + context for solver tests."""
         from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
+        from crn_surrogate.configs.solver_config import SolverConfig
         from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
         from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
         from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
-        from crn_surrogate.configs.solver_config import SolverConfig
         from crn_surrogate.simulator.ode_solver import EulerODESolver
         from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 
@@ -98,7 +98,15 @@ class TestDeterministicSolver:
         t_span = torch.linspace(0.0, 5.0, 20)
         initial_state = torch.tensor([5.0])
 
-        return ode_solver, stoch_solver, drift_model, sde_model, initial_state, crn_context, t_span
+        return (
+            ode_solver,
+            stoch_solver,
+            drift_model,
+            sde_model,
+            initial_state,
+            crn_context,
+            t_span,
+        )
 
     def test_ode_solver_is_reproducible(self, solver_setup):
         """Two EulerODESolver rollouts from the same state should be identical."""
@@ -114,7 +122,15 @@ class TestDeterministicSolver:
 
     def test_ode_solver_differs_from_stochastic(self, solver_setup):
         """EulerODESolver (NeuralDrift) should differ from EulerMaruyamaSolver (NeuralSDE)."""
-        ode_solver, stoch_solver, drift_model, sde_model, initial_state, crn_context, t_span = solver_setup
+        (
+            ode_solver,
+            stoch_solver,
+            drift_model,
+            sde_model,
+            initial_state,
+            crn_context,
+            t_span,
+        ) = solver_setup
         with torch.no_grad():
             det_traj = ode_solver.solve(
                 drift_model, initial_state.clone(), crn_context, t_span, dt=0.1

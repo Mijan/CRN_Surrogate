@@ -9,6 +9,7 @@ These tests exercise complete pipelines across all subsystems:
 import torch
 
 from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
+from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
 from crn_surrogate.data.generation.reference_crns import birth_death, lotka_volterra
@@ -16,7 +17,6 @@ from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.gillespie import GillespieSSA
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.simulator.neural_sde import NeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.training.losses import MeanMatchingLoss

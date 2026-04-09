@@ -169,5 +169,3 @@ class NeuralSDE(NeuralDrift, StochasticSurrogate):
         if x.dim() == 1:
             return raw.view(self._n_species, n_noise)
         return raw.view(x.shape[0], self._n_species, n_noise)
-
-
