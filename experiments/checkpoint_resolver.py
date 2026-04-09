@@ -14,15 +14,13 @@ class CheckpointResolver:
 
     def __init__(self, wandb_project: str, experiment_name: str) -> None:
         """Args:
-            wandb_project: W&B project name for artifact lookups.
-            experiment_name: Experiment name prefix for auto-discovery.
+        wandb_project: W&B project name for artifact lookups.
+        experiment_name: Experiment name prefix for auto-discovery.
         """
         self._wandb_project = wandb_project
         self._experiment_name = experiment_name
 
-    def resolve(
-        self, reference: str, device: torch.device
-    ) -> dict | None:
+    def resolve(self, reference: str, device: torch.device) -> dict | None:
         """Resolve a checkpoint reference to a loaded dict.
 
         Args:
@@ -57,9 +55,7 @@ class CheckpointResolver:
         )
         return self._resolve_artifact(artifact_ref, device)
 
-    def _resolve_artifact(
-        self, artifact_ref: str, device: torch.device
-    ) -> dict | None:
+    def _resolve_artifact(self, artifact_ref: str, device: torch.device) -> dict | None:
         """Download and load a W&B artifact checkpoint.
 
         Args:

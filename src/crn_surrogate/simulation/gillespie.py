@@ -216,7 +216,9 @@ class GillespieSSA:
         Returns:
             List of M Trajectory objects at event times.
         """
-        seeds = [torch.randint(0, 2**62, (1,)).item() for _ in range(n_trajectories)]
+        seeds = [
+            int(torch.randint(0, 2**62, (1,)).item()) for _ in range(n_trajectories)
+        ]
 
         if n_workers <= 1:
             return self._batch_sequential(

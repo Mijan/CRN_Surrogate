@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
@@ -269,7 +270,7 @@ class TrajectoryComparator:
     @staticmethod
     def _trajectory_stats(
         trajs: torch.Tensor, species_index: int
-    ) -> tuple[float, float]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Return (mean, std) numpy arrays over the sample dimension."""
         s = trajs[:, :, species_index]  # (K, T)
         return s.mean(dim=0).numpy(), s.std(dim=0).numpy()

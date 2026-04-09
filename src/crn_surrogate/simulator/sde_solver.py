@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 
 from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.encoder.bipartite_gnn import CRNContext
 from crn_surrogate.simulation.trajectory import Trajectory
-from crn_surrogate.simulator.base import StochasticSurrogate
+from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
 from crn_surrogate.simulator.state_transform import StateTransform
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ class EulerMaruyamaSolver:
 
     def solve(
         self,
-        model: StochasticSurrogate,
+        model: SurrogateModel,
         initial_state: torch.Tensor,
         crn_context: CRNContext,
         t_span: torch.Tensor,
@@ -105,7 +105,7 @@ class EulerMaruyamaSolver:
 
     def _step(
         self,
-        model: StochasticSurrogate,
+        model: SurrogateModel,
         state: torch.Tensor,
         t: torch.Tensor,
         dt: float,
@@ -136,7 +136,9 @@ class EulerMaruyamaSolver:
 
         # 2. Compute drift and diffusion on full state (including clamped species).
         f = model.drift(t, state, crn_context, protocol_embedding)
-        g = model.diffusion(t, state, crn_context, protocol_embedding)
+        g = cast(StochasticSurrogate, model).diffusion(
+            t, state, crn_context, protocol_embedding
+        )
 
         # 3. Euler-Maruyama step.
         z = torch.randn(g.shape[-1], device=state.device)

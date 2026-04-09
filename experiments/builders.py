@@ -88,9 +88,7 @@ def build_measurement_config(cfg: DictConfig) -> MeasurementConfig:
         else NoiseSharing.PER_SPECIES
     )
     return MeasurementConfig(
-        noise=NoiseConfig(
-            mode=mode, sharing=sharing, init_value=meas.noise_init_eps
-        ),
+        noise=NoiseConfig(mode=mode, sharing=sharing, init_value=meas.noise_init_eps),
         min_variance=meas.min_variance,
     )
 
@@ -158,9 +156,11 @@ def build_model(cfg: DictConfig, device: torch.device):
     n_species = cfg.model.max_n_species
     if cfg.solver.deterministic:
         from crn_surrogate.simulator.neural_sde import NeuralDrift
+
         return NeuralDrift(sde_config, n_species).to(device)
     else:
         from crn_surrogate.simulator.neural_sde import NeuralSDE
+
         return NeuralSDE(sde_config, n_species).to(device)
 
 
@@ -179,9 +179,11 @@ def build_simulator(cfg: DictConfig):
     transform = get_state_transform(cfg.solver.use_log1p)
     if cfg.solver.deterministic:
         from crn_surrogate.simulator.ode_solver import EulerODESolver
+
         return EulerODESolver(solver_config, state_transform=transform)
     else:
         from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
+
         return EulerMaruyamaSolver(solver_config, state_transform=transform)
 
 
@@ -198,6 +200,7 @@ def build_dataset_generator_config(cfg: DictConfig):
         MassActionGeneratorConfig,
         RandomTopologyConfig,
     )
+
     d = cfg.dataset
     return MassActionGeneratorConfig(
         topology=RandomTopologyConfig(

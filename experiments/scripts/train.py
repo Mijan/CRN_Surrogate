@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import hydra
 import torch
@@ -39,7 +40,9 @@ def main(cfg: DictConfig) -> None:
 
     device = select_device(cfg.device)
     use_wandb = not cfg.no_wandb
-    flat_config = OmegaConf.to_container(cfg, resolve=True)
+    flat_config: dict[str, Any] = cast(
+        dict[str, Any], OmegaConf.to_container(cfg, resolve=True)
+    )
 
     with WandbSession(
         project=cfg.wandb_project,
@@ -64,7 +67,9 @@ def main(cfg: DictConfig) -> None:
         print(f"Model params:   {sum(p.numel() for p in model.parameters()):,}")
 
         # Resume
-        trainer = Trainer(encoder, model, model_config, train_config, simulator=simulator)
+        trainer = Trainer(
+            encoder, model, model_config, train_config, simulator=simulator
+        )
         start_epoch = _handle_resume(cfg, trainer, encoder, model, device)
 
         # Train
@@ -94,7 +99,9 @@ def main(cfg: DictConfig) -> None:
         print(f"Final train loss: {result.train_losses[-1]:.4f}")
 
 
-def _handle_resume(cfg: DictConfig, trainer, encoder, model, device: torch.device) -> int:
+def _handle_resume(
+    cfg: DictConfig, trainer, encoder, model, device: torch.device
+) -> int:
     """Handle resume and resume_weights_only config fields.
 
     Args:

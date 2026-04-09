@@ -13,6 +13,7 @@ import sys
 import warnings
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 import hydra
 import torch
@@ -24,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
 from crn_surrogate.data.generation.configs import CurationConfig, ODEPreScreenConfig
 from crn_surrogate.data.generation.curation import ViabilityFilter
-from crn_surrogate.data.generation.ode_prescreen import ODEPreScreen
 from crn_surrogate.data.generation.mass_action_generator import MassActionCRNGenerator
+from crn_surrogate.data.generation.ode_prescreen import ODEPreScreen
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
 from crn_surrogate.simulation.data_simulator import DataSimulator
 from experiments.builders import build_data_simulator, build_dataset_generator_config
@@ -49,6 +50,7 @@ def _make_checkpoint_fn(
     Returns:
         Callable that accepts (items, label) and saves a CRNTrajectoryDataset.
     """
+
     def _checkpoint(items: list[TrajectoryItem], label: str) -> None:
         path = output_dir / f"{experiment_name}_{split_name}_{label}.pt"
         torch.save(CRNTrajectoryDataset(items), path)
@@ -148,7 +150,9 @@ def _generate_split(
                 stats.setdefault("n_ode_accepted", 0)
                 stats["n_ode_accepted"] += 1
 
-            traj_tensor = simulator.simulate(crn, init_state, t_max, n_trajs_per_init, time_grid)
+            traj_tensor = simulator.simulate(
+                crn, init_state, t_max, n_trajs_per_init, time_grid
+            )
             if traj_tensor is None:
                 stats["n_timeout"] += 1
                 pbar.set_postfix(timeouts=stats["n_timeout"])
@@ -181,16 +185,19 @@ def _generate_split(
 
             pbar.update(1)
             pbar.set_postfix(
-                pass_rate=f"{stats['n_curated_pass']/stats['n_attempted']:.0%}",
+                pass_rate=f"{stats['n_curated_pass'] / stats['n_attempted']:.0%}",
                 species=ns,
             )
 
             if session.active and len(items) % 10 == 0:
-                session.log({
-                    "data/items_generated": len(items),
-                    "data/attempts": stats["n_attempted"],
-                    "data/pass_rate": stats["n_curated_pass"] / stats["n_attempted"],
-                })
+                session.log(
+                    {
+                        "data/items_generated": len(items),
+                        "data/attempts": stats["n_attempted"],
+                        "data/pass_rate": stats["n_curated_pass"]
+                        / stats["n_attempted"],
+                    }
+                )
 
             if (
                 checkpoint_fn is not None
@@ -279,7 +286,9 @@ def generate(
 
     print(f"Generating {cfg.dataset.n_train} training items...")
     train_items, train_meta = _generate_split(
-        gen, simulator, time_grid,
+        gen,
+        simulator,
+        time_grid,
         n_items=cfg.dataset.n_train,
         n_trajectories=cfg.dataset.n_ssa_trajectories,
         initial_state_mean=cfg.dataset.initial_state_mean,
@@ -287,7 +296,9 @@ def generate(
         t_max=cfg.dataset.t_max,
         n_init_conditions=n_init_conditions,
         session=session,
-        checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "train", session),
+        checkpoint_fn=_make_checkpoint_fn(
+            output_dir, cfg.experiment_name, "train", session
+        ),
         checkpoint_every=checkpoint_every,
         resume_items=resume_train_items,
         ode_prescreen=ode_prescreen,
@@ -295,7 +306,9 @@ def generate(
 
     print(f"Generating {cfg.dataset.n_val} validation items...")
     val_items, val_meta = _generate_split(
-        gen, simulator, time_grid,
+        gen,
+        simulator,
+        time_grid,
         n_items=cfg.dataset.n_val,
         n_trajectories=cfg.dataset.n_ssa_trajectories,
         initial_state_mean=cfg.dataset.initial_state_mean,
@@ -303,7 +316,9 @@ def generate(
         t_max=cfg.dataset.t_max,
         n_init_conditions=n_init_conditions,
         session=session,
-        checkpoint_fn=_make_checkpoint_fn(output_dir, cfg.experiment_name, "val", session),
+        checkpoint_fn=_make_checkpoint_fn(
+            output_dir, cfg.experiment_name, "val", session
+        ),
         checkpoint_every=checkpoint_every,
         resume_items=resume_val_items,
         ode_prescreen=ode_prescreen,
@@ -345,7 +360,9 @@ def main(cfg: DictConfig) -> None:
     torch.manual_seed(cfg.seed)
 
     gen_cfg = cfg.generation
-    flat_config = OmegaConf.to_container(cfg, resolve=True)
+    flat_config: dict[str, Any] = cast(
+        dict[str, Any], OmegaConf.to_container(cfg, resolve=True)
+    )
     simulator = build_data_simulator(cfg)
 
     with WandbSession(

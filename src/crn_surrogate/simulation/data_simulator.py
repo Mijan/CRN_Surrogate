@@ -183,9 +183,9 @@ class FastSSASimulator(DataSimulator):
                 stoichiometry=arrays["stoichiometry"],
                 reactant_matrix=arrays["reactant_matrix"],
                 rate_constants=arrays["rate_constants"],
-                initial_state=initial_state,
+                initial_state=initial_state.numpy(),
                 t_max=t_max,
-                time_grid=time_grid,
+                time_grid=time_grid.numpy(),
                 n_trajectories=n_trajectories,
             )
 
@@ -195,9 +195,9 @@ class FastSSASimulator(DataSimulator):
                 stoichiometry=arrays["stoichiometry"],
                 reactant_matrix=arrays["reactant_matrix"],
                 rate_constants=arrays["rate_constants"],
-                initial_state=initial_state,
+                initial_state=initial_state.numpy(),
                 t_max=t_max,
-                time_grid=time_grid,
+                time_grid=time_grid.numpy(),
                 n_trajectories=n_trajectories,
             )
             try:

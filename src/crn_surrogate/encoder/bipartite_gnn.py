@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 import torch.nn as nn
@@ -132,7 +133,7 @@ class BipartiteGNNEncoder(nn.Module):
         species_indices = torch.cat(
             [torch.arange(ns, device=device) for ns in n_species_list]
         )
-        is_external = torch.cat([r.is_external for r in crn_reprs])
+        is_external = torch.cat([cast(torch.Tensor, r.is_external) for r in crn_reprs])
         h_species = self._species_embed.embed_from_indices(species_indices, is_external)
 
         # Concatenated reaction embeddings

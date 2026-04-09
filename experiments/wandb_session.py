@@ -22,16 +22,16 @@ class WandbSession:
         name: str,
         group: str = "",
         job_type: str = "training",
-        config: dict | None = None,
+        config: dict[str, Any] | None = None,
         enabled: bool = True,
     ) -> None:
         """Args:
-            project: W&B project name.
-            name: W&B run name.
-            group: Optional run group.
-            job_type: W&B job type label.
-            config: Config dict to log with the run.
-            enabled: If False, all methods are no-ops.
+        project: W&B project name.
+        name: W&B run name.
+        group: Optional run group.
+        job_type: W&B job type label.
+        config: Config dict to log with the run.
+        enabled: If False, all methods are no-ops.
         """
         self._project = project
         self._name = name
@@ -39,7 +39,7 @@ class WandbSession:
         self._job_type = job_type
         self._config = config or {}
         self._enabled = enabled
-        self._run = None
+        self._run: Any = None
 
     def __enter__(self) -> "WandbSession":
         if not self._enabled:
@@ -55,10 +55,9 @@ class WandbSession:
         )
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         if self._run is not None:
             self._run.finish()
-        return False
 
     @property
     def active(self) -> bool:
@@ -120,7 +119,9 @@ class WandbSession:
             return
         import wandb
 
-        artifact = wandb.Artifact(name=name, type=artifact_type, metadata=metadata or {})
+        artifact = wandb.Artifact(
+            name=name, type=artifact_type, metadata=metadata or {}
+        )
         for fp in file_paths:
             artifact.add_file(str(fp))
         self._run.log_artifact(artifact)

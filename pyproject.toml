@@ -44,6 +44,7 @@ no_implicit_optional = true
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+exclude = ["experiments/analysis"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

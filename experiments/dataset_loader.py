@@ -19,7 +19,7 @@ class DatasetLoader:
 
     def __init__(self, dataset_dir: str | Path = "experiments/datasets") -> None:
         """Args:
-            dataset_dir: Default local directory to search for dataset files.
+        dataset_dir: Default local directory to search for dataset files.
         """
         self._dataset_dir = Path(dataset_dir)
 
