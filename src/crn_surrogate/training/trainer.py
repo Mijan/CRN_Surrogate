@@ -458,7 +458,7 @@ class Trainer:
             drift = self._model.drift_from_context(t_val, states_flat, ctx_flat)
             states_flat = states_flat + drift * dt
             if self._solver.clip_state:
-                states_flat = states_flat.clamp(min=0.0)
+                states_flat = torch.nn.functional.softplus(states_flat, beta=5.0)
             predicted.append(states_flat.clone())
 
         # (T, BM, S) -> (BM, T, S) -> (B, M, T, S) -> (B*M*T, S)
