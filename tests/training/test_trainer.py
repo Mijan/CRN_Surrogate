@@ -19,7 +19,7 @@ from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.simulator.state_transform import get_state_transform
-from crn_surrogate.training.losses import MSEStepLoss, NLLStepLoss
+from crn_surrogate.training.losses import NLLStepLoss, RelativeMSEStepLoss
 from crn_surrogate.training.trainer import Trainer
 
 
@@ -73,7 +73,7 @@ def _build_deterministic(tmp_path):
     model = NeuralDrift(_small_sde_config(n_noise_channels=2), n_species=2)
     train_config = _small_train_config(tmp_path)
     solver = EulerODESolver(SolverConfig(), state_transform=get_state_transform(False))
-    step_loss = MSEStepLoss()
+    step_loss = RelativeMSEStepLoss()
     return encoder, model, train_config, solver, step_loss
 
 

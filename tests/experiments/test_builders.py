@@ -11,7 +11,7 @@ from crn_surrogate.simulation.data_simulator import ODESimulator, SSASimulator
 from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
-from crn_surrogate.training.losses import MSEStepLoss, NLLStepLoss
+from crn_surrogate.training.losses import NLLStepLoss, RelativeMSEStepLoss
 from experiments.builders import (
     build_data_simulator,
     build_dataset_generator_config,
@@ -228,7 +228,7 @@ def test_build_step_loss_deterministic() -> None:
         solver={"deterministic": True, "use_log1p": False, "clip_state": True}
     )
     loss = build_step_loss(cfg, torch.device("cpu"))
-    assert isinstance(loss, MSEStepLoss)
+    assert isinstance(loss, RelativeMSEStepLoss)
 
 
 def test_build_step_loss_stochastic() -> None:

@@ -11,8 +11,8 @@ from crn_surrogate.training.losses import (
     CombinedRolloutLoss,
     CombinedTrajectoryLoss,
     MeanMatchingLoss,
-    MSEStepLoss,
     NLLStepLoss,
+    RelativeMSEStepLoss,
     RolloutLoss,
     VarianceMatchingLoss,
 )
@@ -84,42 +84,44 @@ def test_variance_mask_excludes_species() -> None:
 
 def test_mse_output_shape() -> None:
     N, S = 100, 3
-    out = MSEStepLoss().compute(torch.rand(N, S), torch.rand(N, S), torch.rand(N, S))
+    out = RelativeMSEStepLoss().compute(
+        torch.rand(N, S), torch.rand(N, S), torch.rand(N, S)
+    )
     assert out.shape == (N, S)
 
 
 def test_mse_zero_on_perfect_prediction() -> None:
     N, S = 50, 4
     y = torch.rand(N, S)
-    out = MSEStepLoss().compute(y, y, torch.rand(N, S))
+    out = RelativeMSEStepLoss().compute(y, y, torch.rand(N, S))
     assert out.abs().max().item() == pytest.approx(0.0, abs=1e-6)
 
 
 def test_mse_positive_on_mismatch() -> None:
     y_next = torch.rand(20, 3) + 1.0
     mu = torch.zeros(20, 3)
-    out = MSEStepLoss().compute(y_next, mu, torch.zeros(20, 3))
+    out = RelativeMSEStepLoss().compute(y_next, mu, torch.zeros(20, 3))
     assert (out > 0).all()
 
 
 def test_mse_ignores_variance() -> None:
     y_next = torch.rand(20, 3)
     mu = torch.rand(20, 3)
-    out1 = MSEStepLoss().compute(y_next, mu, torch.ones(20, 3))
-    out2 = MSEStepLoss().compute(y_next, mu, torch.ones(20, 3) * 100.0)
+    out1 = RelativeMSEStepLoss().compute(y_next, mu, torch.ones(20, 3))
+    out2 = RelativeMSEStepLoss().compute(y_next, mu, torch.ones(20, 3) * 100.0)
     torch.testing.assert_close(out1, out2)
 
 
 def test_mse_parameters_empty() -> None:
-    assert MSEStepLoss().parameters() == []
+    assert RelativeMSEStepLoss().parameters() == []
 
 
 def test_mse_state_dict_empty() -> None:
-    assert MSEStepLoss().state_dict() == {}
+    assert RelativeMSEStepLoss().state_dict() == {}
 
 
 def test_mse_extra_metrics_empty() -> None:
-    assert MSEStepLoss().extra_metrics() == {}
+    assert RelativeMSEStepLoss().extra_metrics() == {}
 
 
 # ── NLLStepLoss ───────────────────────────────────────────────────────────────
@@ -216,7 +218,7 @@ def test_mse_vs_nll_differ() -> None:
     mu = torch.rand(N, S) * 5 + 1
     variance = torch.rand(N, S) * 0.5 + 0.1
 
-    mse_out = MSEStepLoss().compute(y_next, mu, variance)
+    mse_out = RelativeMSEStepLoss().compute(y_next, mu, variance)
     nll_out = NLLStepLoss().compute(y_next, mu, variance)
 
     assert not torch.allclose(mse_out, nll_out)

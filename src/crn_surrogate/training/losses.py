@@ -183,11 +183,14 @@ class StepLoss(ABC):
 BatchedStepLoss = StepLoss
 
 
-class MSEStepLoss(StepLoss):
-    """Squared error loss for deterministic (ODE) surrogates.
+class RelativeMSEStepLoss(StepLoss):
+    """Scale-invariant MSE: ((y_next - mu) / (|y_t| + eps))^2 loss for deterministic (ODE) surrogates.""
 
     Ignores process_variance entirely. No noise model, no variance floor.
     """
+
+    def __init__(self, eps: float = 1.0) -> None:
+        self._eps = eps
 
     def compute(
         self,
@@ -205,7 +208,10 @@ class MSEStepLoss(StepLoss):
         Returns:
             (N, S) squared residuals.
         """
-        return (y_next - mu) ** 2
+
+        residual = y_next - mu
+        scale = y_next.abs() + self._eps
+        return (residual / scale) ** 2
 
 
 class NLLStepLoss(StepLoss):

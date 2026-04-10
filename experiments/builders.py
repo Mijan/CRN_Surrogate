@@ -146,10 +146,10 @@ def build_step_loss(cfg: DictConfig, device: torch.device):
     Returns:
         BatchedStepLoss instance (MSEStepLoss or NLLStepLoss).
     """
-    from crn_surrogate.training.losses import MSEStepLoss, NLLStepLoss
+    from crn_surrogate.training.losses import NLLStepLoss, RelativeMSEStepLoss
 
     if cfg.solver.deterministic:
-        return MSEStepLoss()
+        return RelativeMSEStepLoss()
 
     from crn_surrogate.measurement.direct import DirectObservation
 

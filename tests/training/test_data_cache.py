@@ -18,7 +18,7 @@ from crn_surrogate.simulator.neural_sde import NeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.simulator.state_transform import get_state_transform
 from crn_surrogate.training.data_cache import DataCache
-from crn_surrogate.training.losses import MSEStepLoss
+from crn_surrogate.training.losses import RelativeMSEStepLoss
 from crn_surrogate.training.trainer import Trainer
 
 N_ITEMS = 5
@@ -113,7 +113,9 @@ def test_shuffled_batches_cover_all_items() -> None:
     solver = EulerMaruyamaSolver(
         SolverConfig(), state_transform=get_state_transform(False)
     )
-    trainer = Trainer(encoder, model, train_config, solver, step_loss=MSEStepLoss())
+    trainer = Trainer(
+        encoder, model, train_config, solver, step_loss=RelativeMSEStepLoss()
+    )
 
     batches = trainer._make_batches(cache, shuffle=True)
     all_indices = torch.cat(batches)
