@@ -459,6 +459,7 @@ class Trainer:
             for _ in range(n_sub):
                 drift = self._model.drift_from_context(t_val, states_flat, ctx_flat)
                 states_flat = states_flat + drift * dt_sub
+                states_flat = states_flat.clamp(min=-1e5, max=1e5)
             predicted.append(states_flat)
 
         # (T, BM, S) -> (BM, T, S) -> (B*M*T, S)
