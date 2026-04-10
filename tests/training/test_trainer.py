@@ -182,7 +182,9 @@ def test_reduce_element_loss_equal_per_item(tmp_path) -> None:
 # ── _teacher_forcing_loss / _batched_rollout_loss ─────────────────────────────
 
 
-def _make_trainer_with_prepared_items(tmp_path, training_mode=TrainingMode.TEACHER_FORCING):
+def _make_trainer_with_prepared_items(
+    tmp_path, training_mode=TrainingMode.TEACHER_FORCING
+):
     encoder, model, train_config, solver, step_loss = _build_deterministic(tmp_path)
     cfg = TrainingConfig(
         lr=1e-3,
@@ -203,6 +205,7 @@ def _make_trainer_with_prepared_items(tmp_path, training_mode=TrainingMode.TEACH
     trainer._train_cache = trainer.train.__func__  # just to access _prepare_batch
     # Build cache manually so _prepare_batch is available
     from crn_surrogate.training.data_cache import DataCache
+
     cache = DataCache.from_dataset(dataset, torch.device("cpu"), model.n_species)
     batches = trainer._make_batches(cache, shuffle=False)
     batch = cache.get_batch(batches[0])
@@ -230,6 +233,7 @@ def test_compute_batch_loss_dispatches_teacher_forcing(tmp_path) -> None:
 
     dataset = _make_two_species_dataset()
     from crn_surrogate.training.data_cache import DataCache
+
     cache = DataCache.from_dataset(dataset, torch.device("cpu"), model.n_species)
     batch = cache.get_batch(trainer._make_batches(cache, shuffle=False)[0])
 
@@ -258,6 +262,7 @@ def test_compute_batch_loss_dispatches_rollout(tmp_path) -> None:
 
     dataset = _make_two_species_dataset()
     from crn_surrogate.training.data_cache import DataCache
+
     cache = DataCache.from_dataset(dataset, torch.device("cpu"), model.n_species)
     batch = cache.get_batch(trainer._make_batches(cache, shuffle=False)[0])
 
@@ -274,6 +279,7 @@ def test_batched_rollout_matches_sequential(tmp_path) -> None:
 
     dataset = _make_two_species_dataset()
     from crn_surrogate.training.data_cache import DataCache
+
     cache = DataCache.from_dataset(dataset, torch.device("cpu"), model.n_species)
     batch = cache.get_batch(trainer._make_batches(cache, shuffle=False)[0])
     items = trainer._prepare_batch(batch)
