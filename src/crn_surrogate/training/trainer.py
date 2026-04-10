@@ -103,7 +103,9 @@ class Trainer:
         self._encoder = encoder
         self._model = model
         self._train_config = train_config
-        self._rollout_loss = rollout_loss if rollout_loss is not None else CombinedRolloutLoss()
+        self._rollout_loss = (
+            rollout_loss if rollout_loss is not None else CombinedRolloutLoss()
+        )
         self._state_transform: StateTransform = StateTransform()
         self._solver: EulerMaruyamaSolver | EulerODESolver = simulator
         self._step_loss = step_loss
