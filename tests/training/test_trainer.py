@@ -288,7 +288,6 @@ def test_batched_rollout_matches_sequential(tmp_path) -> None:
     loss_batched = trainer._batched_rollout_loss(items).item()
 
     # Compute loss manually: integrate each item sequentially and use _reduce_element_loss
-    B = len(items)
     item = items[0]
     M, T, S = item.true_trajs_padded.shape
     dt = (item.times[1] - item.times[0]).item()
