@@ -1,20 +1,19 @@
+"""Loss functions for CRN surrogate training.
+
+StepLoss implementations score one-step (teacher-forcing) predictions.
+RolloutLoss implementations score full trajectory rollouts.
+"""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
 import torch
-import torch.nn as nn
 
 from crn_surrogate.measurement.base import MeasurementModel
 
-if TYPE_CHECKING:
-    from crn_surrogate.crn.inputs import ResolvedProtocol
-    from crn_surrogate.encoder.bipartite_gnn import CRNContext
-    from crn_surrogate.simulator.base import StochasticSurrogate
 
-
-class TrajectoryLoss(ABC):
+class RolloutLoss(ABC):
     """Abstract base class for trajectory-matching loss functions.
 
     Both pred_states and true_states must always be 3D tensors.
@@ -52,7 +51,11 @@ class TrajectoryLoss(ABC):
             )
 
 
-class MeanMatchingLoss(TrajectoryLoss):
+# Backward-compatible alias
+TrajectoryLoss = RolloutLoss
+
+
+class MeanMatchingLoss(RolloutLoss):
     """Compares mean of K predicted trajectories against mean of M true trajectories.
 
     L = (1/T) * sum_t || E_pred[X(t)] - E_true[X(t)] ||^2
@@ -83,7 +86,7 @@ class MeanMatchingLoss(TrajectoryLoss):
         return (diff**2).mean()
 
 
-class VarianceMatchingLoss(TrajectoryLoss):
+class VarianceMatchingLoss(RolloutLoss):
     """Compares variance of K predicted trajectories against variance of M true trajectories.
 
     L_var = mean_t( || Var_pred[X(t)] - Var_true[X(t)] ||^2 ) / scale
@@ -135,145 +138,7 @@ class VarianceMatchingLoss(TrajectoryLoss):
         return (diff**2).mean() / scale
 
 
-class TransitionNLL(nn.Module):
-    """One-step negative log-likelihood for SDE teacher-forcing training.
-
-    Evaluates the log-likelihood of observed transitions under the
-    Euler-Maruyama model. Two modes are supported:
-
-    **Without measurement model (legacy)**: Gaussian NLL using process variance only.
-        NLL = ½ Σ_s [ (y_{s,t+1} - μ_s)² / σ²_proc,s + log(σ²_proc,s) ]
-
-    **With measurement model (e.g., DirectObservation)**: combines process and
-    observation variance via the measurement model's ``log_likelihood`` method.
-        v_total = σ²_proc + (eps · μ)²
-        NLL = ½ Σ_s [ (y_{s,t+1} - μ_s)² / v_total,s + log(v_total,s) ]
-
-    The observation noise is crucial at high molecule counts (X ~ 100k) where CLE
-    process noise is negligible relative to the state magnitude. Even a 1% drift
-    prediction error produces a residual far larger than the process variance,
-    causing catastrophic NLL spikes. The proportional observation noise
-    (sigma_obs = eps * x) absorbs moderate drift errors gracefully.
-
-    In both cases, teacher forcing is used: each step starts from the true
-    observed state, not the predicted state.
-
-    Attributes:
-        _measurement_model: Optional measurement model for combining variances.
-        _min_variance: Floor for process variance.
-    """
-
-    def __init__(
-        self,
-        *,
-        measurement_model: MeasurementModel | None = None,
-        # Default 1e-2: SSA data is inherently noisy. A variance floor below 1.0
-        # is not physically meaningful for molecule counts and causes catastrophic
-        # NLL spikes when residuals are even moderately large.
-        min_variance: float = 1e-2,
-    ) -> None:
-        """Args:
-        measurement_model: If None, legacy behavior (process variance only, Gaussian
-            NLL). If provided, its ``log_likelihood`` method is called to
-            combine process and observation variance.
-        min_variance: Floor for process variance from the SDE diffusion.
-        """
-        super().__init__()
-        self._measurement_model = measurement_model
-        self._min_variance = min_variance
-
-    def compute(
-        self,
-        sde: StochasticSurrogate,
-        crn_context: CRNContext,
-        true_trajectory: torch.Tensor,
-        times: torch.Tensor,
-        dt: float,
-        mask: torch.Tensor | None = None,
-        resolved_protocol: ResolvedProtocol | None = None,
-    ) -> torch.Tensor:
-        """Compute mean NLL over all transitions in the trajectory.
-
-        All M*(T-1) transitions are batched into a single forward pass through
-        the drift and diffusion networks (no Python loop over M or T).
-
-        Args:
-            sde: The neural SDE model (provides drift and diffusion).
-            crn_context: CRN encoder output.
-            true_trajectory: (T, n_species) observed states on a regular
-                time grid. Can also be (M, T, n_species) in which case
-                transitions from ALL M trajectories are used.
-            times: (T,) time points corresponding to the trajectory.
-            dt: Time step between consecutive observations.
-            mask: (n_species,) optional bool mask; True = valid (internal) species.
-            resolved_protocol: Optional bundle containing the protocol embedding
-                for FiLM conditioning. Only the embedding field is used here;
-                species clamping is the solver's responsibility.
-
-        Returns:
-            Scalar mean NLL loss.
-
-        Raises:
-            ValueError: If T < 2 (no transitions to evaluate).
-        """
-        protocol_embedding = (
-            resolved_protocol.embedding if resolved_protocol is not None else None
-        )
-
-        if true_trajectory.dim() == 2:
-            true_trajectory = true_trajectory.unsqueeze(0)  # (1, T, n_species)
-
-        M, T, n_species = true_trajectory.shape
-        if T < 2:
-            raise ValueError(f"TransitionNLL requires T >= 2 time steps, got T={T}")
-
-        # Reshape all M*(T-1) transitions into a single batch
-        all_y_t = true_trajectory[:, :-1, :].reshape(
-            -1, n_species
-        )  # (M*(T-1), n_species)
-        all_y_next = true_trajectory[:, 1:, :].reshape(
-            -1, n_species
-        )  # (M*(T-1), n_species)
-        all_times = times[:-1].repeat(M)  # (M*(T-1),)
-
-        # Two batched forward passes instead of M*(T-1) individual ones.
-        if protocol_embedding is not None:
-            all_drift = sde.drift(all_times, all_y_t, crn_context, protocol_embedding)
-            all_G = sde.diffusion(all_times, all_y_t, crn_context, protocol_embedding)
-        else:
-            all_drift = sde.drift(all_times, all_y_t, crn_context)
-            all_G = sde.diffusion(all_times, all_y_t, crn_context)
-
-        mu = all_y_t + all_drift * dt  # (M*(T-1), n_species)
-        variance = (all_G**2).sum(dim=-1) * dt  # (M*(T-1), n_species)
-        variance = variance.clamp(min=self._min_variance)
-
-        residual = all_y_next - mu  # (M*(T-1), n_species)
-
-        if self._measurement_model is not None:
-            log_lik = self._measurement_model.log_likelihood(
-                y_observed=all_y_next,
-                x_predicted=mu,
-                process_variance=variance,
-            )
-            nll = -log_lik  # (M*(T-1), n_species)
-        else:
-            # Legacy: Gaussian NLL with process variance only
-            nll = 0.5 * (
-                residual**2 / variance + variance.log()
-            )  # (M*(T-1), n_species)
-
-        if mask is not None:
-            nll = nll * mask.float()
-
-        n_dims = int(mask.sum().item()) if mask is not None else n_species
-        return nll.sum() / (M * (T - 1) * n_dims)
-
-
-GaussianTransitionNLL = TransitionNLL  # backward compatibility
-
-
-class BatchedStepLoss(ABC):
+class StepLoss(ABC):
     """Per-transition loss on batched (N, S) tensors.
 
     Implementations define how to score the one-step prediction
@@ -286,23 +151,39 @@ class BatchedStepLoss(ABC):
         y_next: torch.Tensor,
         mu: torch.Tensor,
         process_variance: torch.Tensor,
-        species_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute per-element loss.
 
         Args:
             y_next: (N, S) observed next state.
-            mu: (N, S) predicted next state (y_t + drift * dt).
+            mu: (N, S) predicted next state.
             process_variance: (N, S) process variance from SDE diffusion.
-                Zero for deterministic models.
-            species_mask: (S,) or (B, S) optional bool mask.
 
         Returns:
             (N, S) per-element loss (not reduced).
         """
 
+    def parameters(self) -> list[torch.nn.Parameter]:
+        """Trainable parameters owned by this loss. Empty by default."""
+        return []
 
-class MSEStepLoss(BatchedStepLoss):
+    def state_dict(self) -> dict:
+        """Serializable state for checkpointing. Empty by default."""
+        return {}
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore from checkpoint. No-op by default."""
+
+    def extra_metrics(self) -> dict[str, float]:
+        """Per-epoch metrics to log (e.g. obs_eps). Empty by default."""
+        return {}
+
+
+# Backward-compatible alias
+BatchedStepLoss = StepLoss
+
+
+class MSEStepLoss(StepLoss):
     """Squared error loss for deterministic (ODE) surrogates.
 
     Ignores process_variance entirely. No noise model, no variance floor.
@@ -313,7 +194,6 @@ class MSEStepLoss(BatchedStepLoss):
         y_next: torch.Tensor,
         mu: torch.Tensor,
         process_variance: torch.Tensor,
-        species_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute squared residuals.
 
@@ -321,7 +201,6 @@ class MSEStepLoss(BatchedStepLoss):
             y_next: (N, S) observed next state.
             mu: (N, S) predicted next state.
             process_variance: (N, S) ignored.
-            species_mask: (S,) or (B, S) optional bool mask (unused here).
 
         Returns:
             (N, S) squared residuals.
@@ -329,7 +208,7 @@ class MSEStepLoss(BatchedStepLoss):
         return (y_next - mu) ** 2
 
 
-class NLLStepLoss(BatchedStepLoss):
+class NLLStepLoss(StepLoss):
     """Gaussian NLL loss for stochastic (SDE) surrogates.
 
     Combines process variance from the SDE diffusion with observation
@@ -350,17 +229,11 @@ class NLLStepLoss(BatchedStepLoss):
         self._measurement_model = measurement_model
         self._min_variance = min_variance
 
-    @property
-    def measurement_model(self) -> MeasurementModel | None:
-        """The measurement model, if any (needed for optimizer param collection)."""
-        return self._measurement_model
-
     def compute(
         self,
         y_next: torch.Tensor,
         mu: torch.Tensor,
         process_variance: torch.Tensor,
-        species_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Compute Gaussian NLL, combining process and observation variance.
 
@@ -368,7 +241,6 @@ class NLLStepLoss(BatchedStepLoss):
             y_next: (N, S) observed next state.
             mu: (N, S) predicted next state.
             process_variance: (N, S) process variance from SDE diffusion.
-            species_mask: (S,) or (B, S) optional bool mask (unused here).
 
         Returns:
             (N, S) per-element NLL.
@@ -383,9 +255,34 @@ class NLLStepLoss(BatchedStepLoss):
         residual = y_next - mu
         return 0.5 * (residual**2 / variance + variance.log())
 
+    def parameters(self) -> list[torch.nn.Parameter]:
+        """Trainable parameters: measurement model params if present."""
+        if self._measurement_model is not None:
+            return list(self._measurement_model.parameters())
+        return []
 
-class CombinedTrajectoryLoss(TrajectoryLoss):
-    """Weighted sum of multiple TrajectoryLoss instances.
+    def state_dict(self) -> dict:
+        """Serializable state including measurement model weights."""
+        if self._measurement_model is not None:
+            return {"measurement_model": self._measurement_model.state_dict()}
+        return {}
+
+    def load_state_dict(self, state: dict) -> None:
+        """Restore measurement model weights from checkpoint state."""
+        if self._measurement_model is not None and "measurement_model" in state:
+            self._measurement_model.load_state_dict(state["measurement_model"])
+
+    def extra_metrics(self) -> dict[str, float]:
+        """Log obs_eps if the measurement model exposes it."""
+        if self._measurement_model is not None and hasattr(
+            self._measurement_model, "eps"
+        ):
+            return {"obs_eps": self._measurement_model.eps.mean().item()}
+        return {}
+
+
+class CombinedRolloutLoss(RolloutLoss):
+    """Weighted sum of multiple RolloutLoss instances.
 
     Default configuration: MeanMatchingLoss (weight=1.0) +
     VarianceMatchingLoss (weight=var_weight, default 0.5).
@@ -393,7 +290,7 @@ class CombinedTrajectoryLoss(TrajectoryLoss):
 
     def __init__(
         self,
-        losses: list[tuple[TrajectoryLoss, float]] | None = None,
+        losses: list[tuple[RolloutLoss, float]] | None = None,
         var_weight: float = 0.5,
     ) -> None:
         """Args:
@@ -402,7 +299,7 @@ class CombinedTrajectoryLoss(TrajectoryLoss):
         var_weight: Weight for VarianceMatchingLoss in the default configuration.
         """
         if losses is not None:
-            self._losses: list[tuple[TrajectoryLoss, float]] = losses
+            self._losses: list[tuple[RolloutLoss, float]] = losses
         else:
             self._losses = [
                 (MeanMatchingLoss(), 1.0),
@@ -429,3 +326,7 @@ class CombinedTrajectoryLoss(TrajectoryLoss):
         for loss_fn, weight in self._losses:
             total = total + weight * loss_fn.compute(pred_states, true_states, mask)
         return total
+
+
+# Backward-compatible alias
+CombinedTrajectoryLoss = CombinedRolloutLoss

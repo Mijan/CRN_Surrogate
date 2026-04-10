@@ -151,7 +151,7 @@ class DatasetGenerator:
 
         checkpoint_every = self._gen_cfg.checkpoint_every
         n_init_conditions = self._gen_cfg.n_init_conditions
-        n_trajs_per_init = max(1, self._ds_cfg.n_ssa_trajectories // n_init_conditions)
+        n_trajs_per_init = max(1, self._ds_cfg.n_trajectories // n_init_conditions)
 
         stats: dict = {
             "n_attempted": 0,

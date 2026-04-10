@@ -43,7 +43,7 @@ def make_test_cfg(**overrides):
             "lr": 1e-3,
             "max_epochs": 10,
             "batch_size": 4,
-            "n_ssa_samples": 2,
+            "n_trajectory_samples": 2,
             "dt": 0.1,
             "grad_clip_norm": 1.0,
             "scheduler_type": "cosine",
@@ -67,7 +67,7 @@ def make_test_cfg(**overrides):
         "dataset": {
             "n_train": 10,
             "n_val": 5,
-            "n_ssa_trajectories": 2,
+            "n_trajectories": 2,
             "t_max": 10.0,
             "n_time_points": 20,
             "initial_state_mean": 10.0,
@@ -237,11 +237,11 @@ def test_build_step_loss_stochastic() -> None:
     assert isinstance(loss, NLLStepLoss)
 
 
-def test_build_step_loss_stochastic_has_measurement_model() -> None:
+def test_build_step_loss_stochastic_has_params() -> None:
     cfg = make_test_cfg()
     loss = build_step_loss(cfg, torch.device("cpu"))
     assert isinstance(loss, NLLStepLoss)
-    assert loss.measurement_model is not None
+    assert len(loss.parameters()) > 0
 
 
 # ── Device selection ──────────────────────────────────────────────────────────

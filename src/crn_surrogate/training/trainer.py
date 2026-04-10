@@ -15,17 +15,16 @@ from crn_surrogate.configs.training_config import (
 )
 from crn_surrogate.data.dataset import CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
-from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
+from crn_surrogate.simulator.base import SurrogateModel
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.simulator.state_transform import StateTransform
 from crn_surrogate.training.checkpointing import CheckpointManager
 from crn_surrogate.training.data_cache import DataCache
 from crn_surrogate.training.losses import (
-    BatchedStepLoss,
-    CombinedTrajectoryLoss,
-    NLLStepLoss,
-    TrajectoryLoss,
+    CombinedRolloutLoss,
+    RolloutLoss,
+    StepLoss,
 )
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
 
@@ -37,7 +36,7 @@ class TrainingResult:
     Attributes:
         train_losses: Per-epoch mean training loss.
         val_losses: Validation rollout losses recorded every val_every epochs.
-        val_nll_losses: Validation NLL losses recorded every val_every epochs.
+        val_step_losses: Validation step losses recorded every val_every epochs.
         val_epochs: Epoch indices corresponding to val_losses (1-indexed).
         grad_norms: Per-epoch mean gradient norm (pre-clipping). Free to
             compute since clip_grad_norm_ already calculates it.
@@ -46,7 +45,7 @@ class TrainingResult:
 
     train_losses: list[float] = field(default_factory=list)
     val_losses: list[float] = field(default_factory=list)
-    val_nll_losses: list[float] = field(default_factory=list)
+    val_step_losses: list[float] = field(default_factory=list)
     val_epochs: list[int] = field(default_factory=list)
     grad_norms: list[float] = field(default_factory=list)
     learning_rates: list[float] = field(default_factory=list)
@@ -89,8 +88,8 @@ class Trainer:
         model: SurrogateModel,
         train_config: TrainingConfig,
         simulator: EulerMaruyamaSolver | EulerODESolver,
-        step_loss: BatchedStepLoss,
-        loss_fn: TrajectoryLoss | None = None,
+        step_loss: StepLoss,
+        rollout_loss: RolloutLoss | None = None,
     ) -> None:
         """Args:
         encoder: The bipartite GNN encoder.
@@ -98,28 +97,24 @@ class Trainer:
         train_config: Training hyperparameters.
         simulator: Solver for rollout validation and scheduled-sampling training.
         step_loss: Per-transition loss (MSEStepLoss for ODE, NLLStepLoss for SDE).
-        loss_fn: Rollout loss function. Defaults to CombinedTrajectoryLoss.
+        rollout_loss: Full-trajectory loss. Defaults to CombinedRolloutLoss.
             Only used when training_mode is FULL_ROLLOUT or SCHEDULED_SAMPLING.
         """
         self._encoder = encoder
         self._model = model
         self._train_config = train_config
-        self._rollout_loss = (
-            loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
-        )
+        self._rollout_loss = rollout_loss if rollout_loss is not None else CombinedRolloutLoss()
         self._state_transform: StateTransform = StateTransform()
         self._solver: EulerMaruyamaSolver | EulerODESolver = simulator
         self._step_loss = step_loss
 
         self._device = next(encoder.parameters(), torch.zeros(1)).device
 
-        params = list(encoder.parameters()) + list(model.parameters())
-        if (
-            isinstance(step_loss, NLLStepLoss)
-            and step_loss.measurement_model is not None
-        ):
-            params += list(step_loss.measurement_model.parameters())
-
+        params = (
+            list(encoder.parameters())
+            + list(model.parameters())
+            + step_loss.parameters()
+        )
         self._optimizer = torch.optim.AdamW(
             params,
             lr=train_config.lr,
@@ -188,22 +183,24 @@ class Trainer:
             result.learning_rates.append(self._optimizer.param_groups[0]["lr"])
 
             val_loss: float | None = None
-            val_nll: float | None = None
+            val_step_loss: float | None = None
             if val_dataset is not None and epoch % self._train_config.val_every == 0:
                 do_rollout = self._effective_mode(epoch) != TrainingMode.TEACHER_FORCING
-                val_loss, val_nll = self._validate(
+                val_loss, val_step_loss = self._validate(
                     self._val_cache, compute_rollout=do_rollout
                 )
                 result.val_losses.append(val_loss)
-                result.val_nll_losses.append(val_nll)
+                result.val_step_losses.append(val_step_loss)
                 result.val_epochs.append(epoch)
                 self._checkpoint_mgr.save_best(
-                    self._build_state(epoch, val_loss=val_nll), val_nll, epoch
+                    self._build_state(epoch, val_loss=val_step_loss),
+                    val_step_loss,
+                    epoch,
                 )
                 val_part = f"val={val_loss:.4f} | " if do_rollout else ""
                 print(
                     f"Epoch {epoch:4d} | train={train_loss:.4f} | "
-                    f"{val_part}val_nll={val_nll:.4f} | grad={mean_grad_norm:.3f}"
+                    f"{val_part}val_step={val_step_loss:.4f} | grad={mean_grad_norm:.3f}"
                 )
             else:
                 print(
@@ -222,18 +219,11 @@ class Trainer:
                     "grad_norm": mean_grad_norm,
                     "lr": self._optimizer.param_groups[0]["lr"],
                 }
-                if val_nll is not None:
-                    metrics["val_nll"] = val_nll
+                if val_step_loss is not None:
+                    metrics["val_step_loss"] = val_step_loss
                 if val_loss is not None and val_loss != 0.0:
                     metrics["val_loss"] = val_loss
-                if (
-                    isinstance(self._step_loss, NLLStepLoss)
-                    and self._step_loss.measurement_model is not None
-                    and hasattr(self._step_loss.measurement_model, "eps")
-                ):
-                    metrics["obs_eps"] = (
-                        self._step_loss.measurement_model.eps.mean().item()
-                    )
+                metrics.update(self._step_loss.extra_metrics())
                 self._wandb.log_epoch(metrics)
                 self._wandb.log_phase_timings(self._timer)
 
@@ -248,8 +238,8 @@ class Trainer:
     def load_checkpoint(self, checkpoint: dict) -> int:
         """Restore training state from a checkpoint.
 
-        Old checkpoints without ``measurement_model_state`` load without error;
-        the measurement model keeps its initialized values.
+        Backward-compatible: handles old ``measurement_model_state`` key and new
+        ``step_loss_state`` key.
 
         Args:
             checkpoint: Dict loaded from a checkpoint .pt file.
@@ -264,14 +254,13 @@ class Trainer:
             self._optimizer,
             self._scheduler,
         )
-        if "measurement_model_state" in checkpoint:
-            if (
-                isinstance(self._step_loss, NLLStepLoss)
-                and self._step_loss.measurement_model is not None
-            ):
-                self._step_loss.measurement_model.load_state_dict(
-                    checkpoint["measurement_model_state"]
-                )
+        if "step_loss_state" in checkpoint:
+            self._step_loss.load_state_dict(checkpoint["step_loss_state"])
+        elif "measurement_model_state" in checkpoint:
+            # Backward compat with old checkpoints
+            self._step_loss.load_state_dict(
+                {"measurement_model": checkpoint["measurement_model_state"]}
+            )
         return start_epoch
 
     def _build_state(self, epoch: int, **extra) -> dict:
@@ -282,7 +271,7 @@ class Trainer:
             **extra: Additional metadata fields (e.g. val_loss, train_loss).
 
         Returns:
-            Dict suitable for torch.save, containing encoder_state, sde_state,
+            Dict suitable for torch.save, containing encoder_state, model_state,
             optimizer_state, scheduler_state, best_val_loss, epoch, and any
             extra fields.
         """
@@ -295,13 +284,9 @@ class Trainer:
             "best_val_loss": self._checkpoint_mgr.best_val_loss,
             **extra,
         }
-        if (
-            isinstance(self._step_loss, NLLStepLoss)
-            and self._step_loss.measurement_model is not None
-        ):
-            state["measurement_model_state"] = (
-                self._step_loss.measurement_model.state_dict()
-            )
+        step_loss_state = self._step_loss.state_dict()
+        if step_loss_state:
+            state["step_loss_state"] = step_loss_state
         return state
 
     def _make_batches(self, cache: DataCache, shuffle: bool) -> list[torch.Tensor]:
@@ -338,14 +323,11 @@ class Trainer:
             with self._timer.time("backward"):
                 loss.backward()
             # clip_grad_norm_ returns the pre-clipping total norm — free diagnostic
-            all_params = list(self._encoder.parameters()) + list(
-                self._model.parameters()
+            all_params = (
+                list(self._encoder.parameters())
+                + list(self._model.parameters())
+                + self._step_loss.parameters()
             )
-            if (
-                isinstance(self._step_loss, NLLStepLoss)
-                and self._step_loss.measurement_model is not None
-            ):
-                all_params += list(self._step_loss.measurement_model.parameters())
             total_norm = nn.utils.clip_grad_norm_(
                 all_params,
                 self._train_config.grad_clip_norm,
@@ -361,32 +343,6 @@ class Trainer:
         mean_grad_norm = sum(batch_grad_norms) / denom
         return total_loss / denom, mean_grad_norm
 
-    def _prepare_item(self, batch: dict, idx: int) -> PreparedItem:
-        """Encode a single item from a pre-padded collated batch.
-
-        The collator pre-pads trajectories, initial states, and species mask
-        to n_species_sde, and pre-builds bipartite edges on CPU. This method
-        only transfers the CRNTensorRepr to the training device and runs the
-        encoder; no tensor allocations or .item() synchronizations occur here.
-
-        Args:
-            batch: Collated batch dict from CRNCollator(n_species_sde=...).
-            idx: Index of the item within the batch.
-
-        Returns:
-            PreparedItem with all tensors at SDE dimensionality.
-        """
-        crn_repr = batch["crn_reprs"][idx].to(self._device)
-        ctx = self._encoder(crn_repr)
-
-        return PreparedItem(
-            context=ctx,
-            true_trajs_padded=batch["trajectories"][idx],  # (M, T, n_species_sde)
-            species_mask=batch["species_mask"][idx],  # (n_species_sde,) bool
-            times=batch["times"][idx],
-            init_state_padded=batch["initial_states"][idx],  # (n_species_sde,)
-        )
-
     def _prepare_batch(self, batch: dict) -> list[PreparedItem]:
         """Prepare all items in a batch using a single batched encoder pass.
 
@@ -395,7 +351,7 @@ class Trainer:
         PreparedItems from the pre-padded batch tensors.
 
         Args:
-            batch: Collated batch dict from CRNCollator(n_species_sde=...).
+            batch: Batch dict from DataCache.get_batch().
 
         Returns:
             List of B PreparedItems.
@@ -424,12 +380,12 @@ class Trainer:
         items = self._prepare_batch(batch)
 
         if mode == TrainingMode.TEACHER_FORCING:
-            return self._compute_batch_nll_batched(items)
+            return self._compute_batch_step_loss(items)
 
         return self._compute_batch_rollout(B, items)
 
     def _compute_batch_rollout(self, B: int, items: list[PreparedItem]) -> torch.Tensor:
-        # Rollout modes stay sequential (each item needs K independent simulations)
+        """Compute rollout loss sequentially over items."""
         total = torch.zeros(1, device=self._device)
         for item in items:
             k = self._train_config.n_sde_samples
@@ -451,23 +407,22 @@ class Trainer:
             )
         return total / B
 
-    def _compute_batch_nll_batched(
+    def _compute_batch_step_loss(
         self,
         items: list[PreparedItem],
     ) -> torch.Tensor:
-        """Compute mean NLL over all items using a single batched forward pass.
+        """Compute mean step loss over all items using a single batched forward pass.
 
         Collects all M*(T-1) transitions from all B items into one large tensor,
-        runs one batched drift and diffusion forward pass, computes per-transition
-        NLL, then normalizes per-item (each item contributes equally regardless
-        of its number of active species).
+        runs one batched forward pass via model.predict_transition, applies the
+        step loss, then normalizes per-item (each item contributes equally
+        regardless of its number of active species).
 
         Args:
-            items: List of B PreparedItems from _prepare_item().
+            items: List of B PreparedItems from _prepare_batch().
 
         Returns:
-            Scalar mean NLL loss (same value as the sequential per-item loop
-            would produce, up to floating point ordering).
+            Scalar mean step loss.
         """
         B = len(items)
         dt = (items[0].times[1] - items[0].times[0]).item()
@@ -494,37 +449,25 @@ class Trainer:
         t_single = items[0].times[:-1].repeat(M)  # (n_trans,)
         t_all = t_single.repeat(B)  # (B * n_trans,)
 
-        # TODO: When protocol-conditioned training is added, expand protocol
-        # embeddings per-item the same way as context vectors and pass to
-        # drift_from_context / diffusion_from_context.
-
-        # ONE batched forward pass (replaces B sequential passes)
-        all_drift = self._model.drift_from_context(t_all, y_t, ctx_expanded, None)
-
-        mu = y_t + all_drift * dt  # (B * n_trans, S)
-
-        if isinstance(self._model, StochasticSurrogate):
-            all_G = self._model.diffusion_from_context(t_all, y_t, ctx_expanded, None)
-            variance = (all_G**2).sum(dim=-1) * dt  # (B * n_trans, S)
-        else:
-            variance = torch.zeros_like(mu)
+        # ONE batched forward pass via polymorphic predict_transition
+        mu, variance = self._model.predict_transition(t_all, y_t, ctx_expanded, dt)
 
         # Polymorphic loss (MSE for ODE, NLL for SDE)
-        nll = self._step_loss.compute(y_next, mu, variance)  # (B * n_trans, S)
+        element_loss = self._step_loss.compute(y_next, mu, variance)  # (B * n_trans, S)
 
         # Apply species masks and normalize per item
         masks = torch.stack([item.species_mask for item in items])  # (B, S)
         masks_expanded = masks.unsqueeze(1).expand(B, n_trans, S)  # (B, n_trans, S)
 
-        nll_reshaped = nll.reshape(B, n_trans, S)
-        nll_masked = nll_reshaped * masks_expanded.float()
+        element_loss_reshaped = element_loss.reshape(B, n_trans, S)
+        masked_loss = element_loss_reshaped * masks_expanded.float()
 
         # Per-item mean: sum over transitions and species, divide by (n_trans * n_active)
-        nll_per_item = nll_masked.sum(dim=(1, 2))  # (B,)
+        loss_per_item = masked_loss.sum(dim=(1, 2))  # (B,)
         n_dims_per_item = masks.float().sum(dim=1)  # (B,)
-        nll_per_item = nll_per_item / (n_trans * n_dims_per_item)  # (B,)
+        loss_per_item = loss_per_item / (n_trans * n_dims_per_item)  # (B,)
 
-        return nll_per_item.mean()
+        return loss_per_item.mean()
 
     def _effective_mode(self, epoch: int) -> TrainingMode:
         """Determine effective training mode for this epoch."""
@@ -558,26 +501,26 @@ class Trainer:
         Args:
             val_cache: Pre-built DataCache for the validation set.
             compute_rollout: If True, also compute the full SDE rollout loss
-                (expensive). If False, only compute teacher-forcing NLL.
+                (expensive). If False, only compute teacher-forcing step loss.
 
         Returns:
-            Tuple of (rollout_loss, nll_loss). rollout_loss is 0.0 when
+            Tuple of (rollout_loss, step_loss). rollout_loss is 0.0 when
             compute_rollout is False.
         """
         self._encoder.eval()
         self._model.eval()
         total_rollout = 0.0
-        total_nll = 0.0
+        total_step = 0.0
         n_batches = 0
         with torch.no_grad():
             for batch_indices in self._make_batches(val_cache, shuffle=False):
                 batch = val_cache.get_batch(batch_indices)
                 B = len(batch["crn_reprs"])
 
-                # Single batched encoder pass — shared by NLL and rollout
+                # Single batched encoder pass — shared by step loss and rollout
                 items = self._prepare_batch(batch)
 
-                total_nll += self._compute_batch_nll_batched(items).item()
+                total_step += self._compute_batch_step_loss(items).item()
 
                 if compute_rollout:
                     rollout_total = torch.zeros(1, device=self._device)
@@ -604,7 +547,7 @@ class Trainer:
                 n_batches += 1
 
         denom = max(n_batches, 1)
-        return total_rollout / denom, total_nll / denom
+        return total_rollout / denom, total_step / denom
 
     def _build_scheduler(
         self,

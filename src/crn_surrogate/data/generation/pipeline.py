@@ -276,7 +276,7 @@ class DataGenerationPipeline:
             propensity_fn=crn.evaluate_propensities,
             initial_state=initial_state.clone(),
             t_max=self._config.simulation_time,
-            n_trajectories=self._config.n_ssa_trajectories,
+            n_trajectories=self._config.n_trajectories,
         )
         return Trajectory.stack_on_grid(trajectories, self._time_grid)
 

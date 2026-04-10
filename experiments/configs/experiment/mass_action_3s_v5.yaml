@@ -11,7 +11,7 @@ wandb_group: mass-action-3s
 
 training:
   batch_size: 512
-  n_ssa_samples: 16
+  n_trajectory_samples: 16
 
 model:
   context_dropout: 0.1

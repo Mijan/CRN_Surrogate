@@ -15,7 +15,7 @@ solver:
 dataset:
   n_train: 30000
   n_val: 3000
-  n_ssa_trajectories: 32
+  n_trajectories: 32
 
 model:
   context_dropout: 0.2

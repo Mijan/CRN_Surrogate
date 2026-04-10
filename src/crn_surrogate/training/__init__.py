@@ -4,13 +4,14 @@ from crn_surrogate.training.checkpointing import CheckpointManager
 from crn_surrogate.training.data_cache import DataCache
 from crn_surrogate.training.losses import (
     BatchedStepLoss,
+    CombinedRolloutLoss,
     CombinedTrajectoryLoss,
-    GaussianTransitionNLL,
     MeanMatchingLoss,
     MSEStepLoss,
     NLLStepLoss,
+    RolloutLoss,
+    StepLoss,
     TrajectoryLoss,
-    TransitionNLL,
     VarianceMatchingLoss,
 )
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
@@ -19,19 +20,20 @@ from crn_surrogate.training.trainer import PreparedItem, Trainer, TrainingResult
 __all__ = [
     "BatchedStepLoss",
     "CheckpointManager",
+    "CombinedRolloutLoss",
+    "CombinedTrajectoryLoss",
     "DataCache",
+    "MeanMatchingLoss",
     "MSEStepLoss",
     "NLLStepLoss",
-    "CombinedTrajectoryLoss",
-    "GaussianTransitionNLL",
-    "MeanMatchingLoss",
     "PhaseTimer",
     "PreparedItem",
     "ProfileLogger",
+    "RolloutLoss",
+    "StepLoss",
     "Trainer",
     "TrainingResult",
     "TrajectoryLoss",
-    "TransitionNLL",
     "VarianceMatchingLoss",
     "WandbLogger",
 ]

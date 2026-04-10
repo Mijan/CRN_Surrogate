@@ -66,7 +66,7 @@ class GenerationConfig:
     Attributes:
         sampling: Configuration for kinetic parameter sampling.
         curation: Configuration for trajectory viability filtering.
-        n_ssa_trajectories: Number of independent SSA runs per CRN configuration.
+        n_trajectories: Number of independent SSA runs per CRN configuration.
         simulation_time: End time for each SSA simulation.
         n_timepoints: Number of evenly-spaced timepoints in the output grid.
         batch_size: Number of parameter configs to sample per batch before curation.
@@ -78,7 +78,7 @@ class GenerationConfig:
 
     sampling: SamplingConfig = field(default_factory=SamplingConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
-    n_ssa_trajectories: int = 32
+    n_trajectories: int = 32
     simulation_time: float = 100.0
     n_timepoints: int = 200
     batch_size: int = 64

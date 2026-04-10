@@ -29,7 +29,7 @@ class TrainingConfig:
     batch_size: int = 16
     grad_clip_norm: float = 1.0
     n_sde_samples: int = 8  # K parallel SDE rollouts per training item
-    n_ssa_samples: int = 32  # M independent SSA trajectories per dataset item
+    n_trajectory_samples: int = 32  # M independent SSA trajectories per dataset item
     dt: float = 0.1  # Euler-Maruyama step size
     val_every: int = 10
     checkpoint_dir: str = "checkpoints"
@@ -57,6 +57,6 @@ class TrainingConfig:
         return (
             f"TrainingConfig(lr={self.lr}, max_epochs={self.max_epochs}, "
             f"batch_size={self.batch_size}, dt={self.dt}, "
-            f"n_ssa_samples={self.n_ssa_samples}, scheduler={self.scheduler_type.value}, "
+            f"n_trajectory_samples={self.n_trajectory_samples}, scheduler={self.scheduler_type.value}, "
             f"training_mode={self.training_mode.value}, use_wandb={self.use_wandb})"
         )

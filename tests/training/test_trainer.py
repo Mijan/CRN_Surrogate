@@ -41,7 +41,7 @@ def _small_train_config(tmp_path) -> TrainingConfig:
         lr=1e-3,
         max_epochs=1,
         batch_size=2,
-        n_ssa_samples=2,
+        n_trajectory_samples=2,
         dt=0.1,
         val_every=1,
         scheduler_type=SchedulerType.COSINE,

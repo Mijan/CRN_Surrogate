@@ -1,6 +1,6 @@
 n_train: 500
 n_val: 100
-n_ssa_trajectories: 32
+n_trajectories: 32
 t_max: 20.0
 n_time_points: 50
 initial_state_mean: 10.0
