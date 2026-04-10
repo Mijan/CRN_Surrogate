@@ -110,6 +110,7 @@ def build_training_config(cfg: DictConfig, *, use_wandb: bool = True) -> Trainin
         batch_size=t.batch_size,
         n_trajectory_samples=t.n_trajectory_samples,
         dt=t.dt,
+        n_rollout_substeps=t.n_rollout_substeps,
         val_every=t.val_every,
         grad_clip_norm=t.grad_clip_norm,
         scheduler_type=SchedulerType.from_str(t.scheduler_type),

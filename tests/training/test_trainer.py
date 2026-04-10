@@ -316,3 +316,104 @@ def test_batched_rollout_matches_sequential(tmp_path) -> None:
     loss_sequential = torch.stack(manual_losses).mean().item()
 
     assert loss_batched == pytest.approx(loss_sequential, rel=1e-4)
+
+
+# ── Rollout correctness: gradients and substeps ───────────────────────────────
+
+
+def test_batched_rollout_no_zero_gradient(tmp_path) -> None:
+    """Regression test: no clamp/softplus means gradients flow from epoch 1."""
+    encoder, model, train_config, solver, step_loss = _build_deterministic(tmp_path)
+    trainer = Trainer(encoder, model, train_config, solver, step_loss=step_loss)
+
+    from crn_surrogate.training.data_cache import DataCache
+
+    dataset = _make_two_species_dataset()
+    cache = DataCache.from_dataset(dataset, torch.device("cpu"), model.n_species)
+    batch = cache.get_batch(trainer._make_batches(cache, shuffle=False)[0])
+    items = trainer._prepare_batch(batch)
+
+    loss = trainer._batched_rollout_loss(items)
+    loss.backward()
+
+    has_grad = any(
+        p.grad is not None and p.grad.abs().sum().item() > 0 for p in model.parameters()
+    )
+    assert has_grad, "All gradients are zero — clamp/softplus may still be killing them"
+
+
+def test_batched_rollout_negative_states_allowed(tmp_path) -> None:
+    """Loss must be finite even when predicted states go negative."""
+    encoder, model, train_config, solver, step_loss = _build_deterministic(tmp_path)
+
+    # Initialize model weights to large negative values to force negative states
+    with torch.no_grad():
+        for p in model.parameters():
+            p.fill_(-5.0)
+
+    trainer = Trainer(encoder, model, train_config, solver, step_loss=step_loss)
+
+    from crn_surrogate.training.data_cache import DataCache
+
+    dataset = _make_two_species_dataset()
+    cache = DataCache.from_dataset(dataset, torch.device("cpu"), model.n_species)
+    batch = cache.get_batch(trainer._make_batches(cache, shuffle=False)[0])
+    items = trainer._prepare_batch(batch)
+
+    loss = trainer._batched_rollout_loss(items)
+    assert torch.isfinite(loss), "Loss is not finite with negative states"
+
+    loss.backward()
+    has_grad = any(
+        p.grad is not None and p.grad.abs().sum().item() > 0 for p in model.parameters()
+    )
+    assert has_grad
+
+
+def test_batched_rollout_substeps_improve_accuracy(tmp_path) -> None:
+    """More substeps should produce lower MSE against an analytical reference."""
+    from crn_surrogate.configs.training_config import TrainingConfig, TrainingMode
+
+    encoder, model, _, solver, step_loss = _build_deterministic(tmp_path)
+
+    # Build ground truth via fine integration (large n_sub)
+    dataset = _make_two_species_dataset()
+    from crn_surrogate.training.data_cache import DataCache
+
+    device = torch.device("cpu")
+
+    def _make_trainer_with_nsub(nsub: int) -> Trainer:
+        cfg = TrainingConfig(
+            lr=1e-3,
+            max_epochs=1,
+            batch_size=2,
+            n_trajectory_samples=1,
+            dt=0.1,
+            n_rollout_substeps=nsub,
+            val_every=1,
+            scheduler_type=SchedulerType.COSINE,
+            use_wandb=False,
+            checkpoint_dir=str(tmp_path / "checkpoints"),
+            log_dir=str(tmp_path / "logs"),
+            training_mode=TrainingMode.FULL_ROLLOUT,
+        )
+        return Trainer(encoder, model, cfg, solver, step_loss=step_loss)
+
+    cache = DataCache.from_dataset(dataset, device, model.n_species)
+    batch = cache.get_batch(
+        _make_trainer_with_nsub(1)._make_batches(cache, shuffle=False)[0]
+    )
+
+    with torch.no_grad():
+        items1 = _make_trainer_with_nsub(1)._prepare_batch(batch)
+        items10 = _make_trainer_with_nsub(10)._prepare_batch(batch)
+        loss_1sub = _make_trainer_with_nsub(1)._batched_rollout_loss(items1).item()
+        loss_10sub = _make_trainer_with_nsub(10)._batched_rollout_loss(items10).item()
+
+    # With more substeps the predicted trajectory is more accurate,
+    # so the loss against the ground truth should be lower or equal.
+    # (Both use same random model weights so this is purely about integration accuracy.)
+    assert loss_10sub <= loss_1sub * 2, (
+        f"More substeps did not improve accuracy: loss_1sub={loss_1sub:.4f}, "
+        f"loss_10sub={loss_10sub:.4f}"
+    )

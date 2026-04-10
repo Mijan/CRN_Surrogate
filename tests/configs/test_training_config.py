@@ -33,3 +33,7 @@ def test_frozen():
     cfg = TrainingConfig()
     with pytest.raises((AttributeError, TypeError)):
         cfg.lr = 0.5  # type: ignore[misc]
+
+
+def test_n_rollout_substeps_default():
+    assert TrainingConfig().n_rollout_substeps == 10

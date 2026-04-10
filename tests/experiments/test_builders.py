@@ -45,6 +45,7 @@ def make_test_cfg(**overrides):
             "batch_size": 4,
             "n_trajectory_samples": 2,
             "dt": 0.1,
+            "n_rollout_substeps": 10,
             "grad_clip_norm": 1.0,
             "scheduler_type": "cosine",
             "training_mode": "teacher_forcing",

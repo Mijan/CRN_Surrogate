@@ -420,11 +420,13 @@ class Trainer:
     def _batched_rollout_loss(self, items: list[PreparedItem]) -> torch.Tensor:
         """Compute loss via batched ODE/SDE rollout across all items.
 
-        Integrates all B items forward in lockstep. At each Euler step,
-        one batched drift_from_context call processes all items.
+        Integrates all B items forward in lockstep using Euler substeps.
+        At each substep, one batched drift_from_context call processes all
+        items simultaneously on GPU.
 
-        For T=100, this is 99 batched GPU calls instead of B sequential
-        solver.solve() calls.
+        No positivity constraint is applied during training. Negative
+        states are penalized naturally by the loss function. The inference
+        solver still applies hard clamping.
 
         Args:
             items: List of B PreparedItems from _prepare_batch().
@@ -433,35 +435,33 @@ class Trainer:
             Scalar mean loss.
         """
         B = len(items)
-        dt = (items[0].times[1] - items[0].times[0]).item()
         M, T, S = items[0].true_trajs_padded.shape
+        dt_grid = (items[0].times[1] - items[0].times[0]).item()
+        n_sub = self._train_config.n_rollout_substeps
+        dt_sub = dt_grid / n_sub
 
         ctx = torch.stack([item.context.context_vector for item in items])
+        BM = B * M
+        ctx_flat = ctx.unsqueeze(1).expand(B, M, -1).reshape(BM, -1)
 
         true_trajs = torch.stack([item.true_trajs_padded for item in items])
         if self._state_transform is not None:
             true_trajs = self._state_transform.transform_trajectory(true_trajs)
 
-        # Initial states: first time step of each trajectory
-        states = true_trajs[:, :, 0, :].clone()  # (B, M, S)
+        # Initial states from first time step: (B, M, S) -> (BM, S)
+        states_flat = true_trajs[:, :, 0, :].reshape(BM, S)
 
-        # Flatten B and M for batched drift calls
-        BM = B * M
-        states_flat = states.reshape(BM, S)
-        ctx_flat = ctx.unsqueeze(1).expand(B, M, -1).reshape(BM, -1)
-
-        predicted = [states_flat.clone()]
         t_grid = items[0].times
+        predicted = [states_flat]
 
         for t_idx in range(T - 1):
             t_val = t_grid[t_idx].expand(BM)
-            drift = self._model.drift_from_context(t_val, states_flat, ctx_flat)
-            states_flat = states_flat + drift * dt
-            if self._solver.clip_state:
-                states_flat = torch.nn.functional.softplus(states_flat, beta=5.0)
-            predicted.append(states_flat.clone())
+            for _ in range(n_sub):
+                drift = self._model.drift_from_context(t_val, states_flat, ctx_flat)
+                states_flat = states_flat + drift * dt_sub
+            predicted.append(states_flat)
 
-        # (T, BM, S) -> (BM, T, S) -> (B, M, T, S) -> (B*M*T, S)
+        # (T, BM, S) -> (BM, T, S) -> (B*M*T, S)
         pred_traj = torch.stack(predicted, dim=0).permute(1, 0, 2)
         pred_flat = pred_traj.reshape(B * M * T, S)
         true_flat = true_trajs.reshape(B * M * T, S)

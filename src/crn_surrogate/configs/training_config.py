@@ -32,6 +32,9 @@ class TrainingConfig:
     n_sde_samples: int = 8  # K parallel SDE rollouts per training item
     n_trajectory_samples: int = 32  # M independent SSA trajectories per dataset item
     dt: float = 0.1  # Euler-Maruyama step size
+    n_rollout_substeps: int = (
+        10  # Euler substeps per grid interval during rollout training
+    )
     val_every: int = 10
     checkpoint_dir: str = "checkpoints"
     log_dir: str = "logs"

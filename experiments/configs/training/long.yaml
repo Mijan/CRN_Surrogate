@@ -3,6 +3,7 @@ max_epochs: 1000
 batch_size: 512
 n_trajectory_samples: 16
 dt: 0.1
+n_rollout_substeps: 10
 grad_clip_norm: 1.0
 scheduler_type: reduce_on_plateau
 training_mode: teacher_forcing
