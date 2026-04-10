@@ -10,6 +10,7 @@ experiment_name: mass_action_3s_v5
 wandb_group: mass-action-3s
 
 training:
+  training_mode: teacher_forcing
   batch_size: 512
   n_trajectory_samples: 16
 

@@ -6,7 +6,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 
-from crn_surrogate.measurement.config import NoiseMode
+from crn_surrogate.measurement.config import NoiseMode, NoiseSharing
 from crn_surrogate.simulation.data_simulator import ODESimulator, SSASimulator
 from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
 from crn_surrogate.simulator.ode_solver import EulerODESolver
@@ -47,6 +47,9 @@ def make_test_cfg(**overrides):
             "dt": 0.1,
             "grad_clip_norm": 1.0,
             "scheduler_type": "cosine",
+            "training_mode": "teacher_forcing",
+            "scheduled_sampling_start_epoch": 50,
+            "scheduled_sampling_end_epoch": 200,
             "val_every": 5,
             "checkpoint_every": 0,
             "num_workers": 0,
@@ -250,3 +253,55 @@ def test_build_step_loss_stochastic_has_params() -> None:
 def test_select_device_cpu() -> None:
     device = select_device("cpu")
     assert device == torch.device("cpu")
+
+
+# ── LabeledEnum passthrough in build_training_config ─────────────────────────
+
+
+def test_build_training_config_training_mode() -> None:
+    cfg = OmegaConf.merge(
+        make_test_cfg(), {"training": {"training_mode": "full_rollout"}}
+    )
+    tc = build_training_config(cfg, use_wandb=False)
+    from crn_surrogate.configs.training_config import TrainingMode
+
+    assert tc.training_mode == TrainingMode.FULL_ROLLOUT
+
+
+def test_build_training_config_scheduled_sampling_fields() -> None:
+    cfg = OmegaConf.merge(
+        make_test_cfg(),
+        {
+            "training": {
+                "training_mode": "scheduled_sampling",
+                "scheduled_sampling_start_epoch": 10,
+                "scheduled_sampling_end_epoch": 80,
+            }
+        },
+    )
+    tc = build_training_config(cfg, use_wandb=False)
+    assert tc.scheduled_sampling_start_epoch == 10
+    assert tc.scheduled_sampling_end_epoch == 80
+
+
+def test_build_training_config_invalid_mode_raises() -> None:
+    cfg = OmegaConf.merge(make_test_cfg(), {"training": {"training_mode": "bogus"}})
+    with pytest.raises(ValueError, match="TrainingMode"):
+        build_training_config(cfg, use_wandb=False)
+
+
+# ── NoiseMode / NoiseSharing passthrough ─────────────────────────────────────
+
+
+def test_build_measurement_config_noise_mode_fixed() -> None:
+    cfg = OmegaConf.merge(make_test_cfg(), {"measurement": {"noise_mode": "fixed"}})
+    mc = build_model_config(cfg).measurement
+    assert mc.noise.mode == NoiseMode.FIXED
+
+
+def test_build_measurement_config_noise_sharing_per_species() -> None:
+    cfg = OmegaConf.merge(
+        make_test_cfg(), {"measurement": {"noise_sharing": "per_species"}}
+    )
+    mc = build_model_config(cfg).measurement
+    assert mc.noise.sharing == NoiseSharing.PER_SPECIES

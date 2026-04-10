@@ -5,6 +5,9 @@ n_trajectory_samples: 16
 dt: 0.1
 grad_clip_norm: 1.0
 scheduler_type: reduce_on_plateau
+training_mode: teacher_forcing
+scheduled_sampling_start_epoch: 50
+scheduled_sampling_end_epoch: 200
 val_every: 5
 checkpoint_every: 10
 num_workers: 0

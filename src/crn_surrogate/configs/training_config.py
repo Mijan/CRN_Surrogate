@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+
+from crn_surrogate.configs.labeled_enum import LabeledEnum
 
 
-class SchedulerType(Enum):
+class SchedulerType(LabeledEnum):
     """Learning-rate scheduler choice."""
 
     COSINE = "cosine"
     REDUCE_ON_PLATEAU = "reduce_on_plateau"
 
 
-class TrainingMode(Enum):
+class TrainingMode(LabeledEnum):
     """Training strategy for the neural SDE."""
 
     TEACHER_FORCING = "teacher_forcing"

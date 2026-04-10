@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, auto
+
+from crn_surrogate.configs.labeled_enum import LabeledEnum
 
 
-class NoiseMode(Enum):
+class NoiseMode(LabeledEnum):
     """Whether observation noise parameters are learned or fixed."""
 
-    FIXED = auto()
-    LEARNED = auto()
+    FIXED = "fixed"
+    LEARNED = "learned"
 
 
-class NoiseSharing(Enum):
+class NoiseSharing(LabeledEnum):
     """Whether observation noise is shared across species or per-species."""
 
-    SHARED = auto()
-    PER_SPECIES = auto()
+    SHARED = "shared"
+    PER_SPECIES = "per_species"
 
 
 @dataclass(frozen=True)

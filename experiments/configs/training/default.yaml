@@ -5,6 +5,9 @@ n_trajectory_samples: 32
 dt: 0.1
 grad_clip_norm: 1.0
 scheduler_type: cosine
+training_mode: teacher_forcing
+scheduled_sampling_start_epoch: 50
+scheduled_sampling_end_epoch: 200
 val_every: 10
 checkpoint_every: 0
 num_workers: 0

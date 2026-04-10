@@ -10,11 +10,14 @@ experiment_name: mass_action_3s_det
 wandb_group: mass-action-3s-det
 
 training:
+  training_mode: full_rollout
+  scheduled_sampling_start_epoch: 50
+  scheduled_sampling_end_epoch: 200
   lr: 3.0e-4
   max_epochs: 1000
-  batch_size: 1024
+  batch_size: 512
   n_trajectory_samples: 1
-  checkpoint_every: 20
+  checkpoint_every: 10
 
 model:
   max_n_reactions: 7

@@ -69,12 +69,8 @@ def _build_measurement_config(cfg: DictConfig) -> MeasurementConfig:
         MeasurementConfig instance.
     """
     meas = cfg.measurement
-    mode = NoiseMode.LEARNED if meas.noise_mode == "learned" else NoiseMode.FIXED
-    sharing = (
-        NoiseSharing.SHARED
-        if meas.noise_sharing == "shared"
-        else NoiseSharing.PER_SPECIES
-    )
+    mode = NoiseMode.from_str(meas.noise_mode)
+    sharing = NoiseSharing.from_str(meas.noise_sharing)
     return MeasurementConfig(
         noise=NoiseConfig(mode=mode, sharing=sharing, init_value=meas.noise_init_eps),
         min_variance=meas.min_variance,
@@ -108,11 +104,6 @@ def build_training_config(cfg: DictConfig, *, use_wandb: bool = True) -> Trainin
         TrainingConfig instance.
     """
     t = cfg.training
-    sched = (
-        SchedulerType.COSINE
-        if t.scheduler_type == "cosine"
-        else SchedulerType.REDUCE_ON_PLATEAU
-    )
     return TrainingConfig(
         lr=t.lr,
         max_epochs=t.max_epochs,
@@ -121,8 +112,10 @@ def build_training_config(cfg: DictConfig, *, use_wandb: bool = True) -> Trainin
         dt=t.dt,
         val_every=t.val_every,
         grad_clip_norm=t.grad_clip_norm,
-        scheduler_type=sched,
-        training_mode=TrainingMode.TEACHER_FORCING,
+        scheduler_type=SchedulerType.from_str(t.scheduler_type),
+        training_mode=TrainingMode.from_str(t.training_mode),
+        scheduled_sampling_start_epoch=t.scheduled_sampling_start_epoch,
+        scheduled_sampling_end_epoch=t.scheduled_sampling_end_epoch,
         checkpoint_every=t.checkpoint_every,
         use_wandb=use_wandb,
         wandb_project=cfg.wandb_project,
