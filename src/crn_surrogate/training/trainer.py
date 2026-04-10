@@ -375,99 +375,132 @@ class Trainer:
 
     def _compute_batch_loss(self, batch: dict, epoch: int = 1) -> torch.Tensor:
         """Compute mean loss over all items in the batch."""
-        B = len(batch["crn_reprs"])
         mode = self._effective_mode(epoch)
-
-        # Single batched encoder pass instead of B sequential ones
         items = self._prepare_batch(batch)
 
         if mode == TrainingMode.TEACHER_FORCING:
-            return self._compute_batch_step_loss(items)
+            return self._teacher_forcing_loss(items)
+        return self._batched_rollout_loss(items)
 
-        return self._compute_batch_rollout(B, items)
+    def _teacher_forcing_loss(self, items: list[PreparedItem]) -> torch.Tensor:
+        """Compute loss via teacher forcing across all items.
 
-    def _compute_batch_rollout(self, B: int, items: list[PreparedItem]) -> torch.Tensor:
-        """Compute rollout loss sequentially over items."""
-        total = torch.zeros(1, device=self._device)
-        for item in items:
-            k = self._train_config.n_sde_samples
-            pred_samples = [
-                self._solver.solve(
-                    self._model,
-                    item.init_state_padded.clone(),
-                    item.context,
-                    item.times,
-                    self._train_config.dt,
-                ).states
-                for _ in range(k)
-            ]
-            pred_states = torch.stack(pred_samples, dim=0)  # (K, T, n_species_sde)
-            total = total + self._rollout_loss.compute(
-                pred_states,
-                item.true_trajs_padded,
-                mask=item.species_mask,
-            )
-        return total / B
+        All B*M*(T-1) transitions are batched into one predict_transition call.
 
-    def _compute_batch_step_loss(
-        self,
-        items: list[PreparedItem],
-    ) -> torch.Tensor:
-        """Compute mean step loss over all items using a single batched forward pass.
+        Args:
+            items: List of B PreparedItems.
 
-        Collects all M*(T-1) transitions from all B items into one large tensor,
-        runs one batched forward pass via model.predict_transition, applies the
-        step loss, then normalizes per-item (each item contributes equally
-        regardless of its number of active species).
+        Returns:
+            Scalar mean loss.
+        """
+        B = len(items)
+        dt = (items[0].times[1] - items[0].times[0]).item()
+        M, T, S = items[0].true_trajs_padded.shape
+        n_trans = M * (T - 1)
+
+        all_trajs = torch.stack([item.true_trajs_padded for item in items])
+        if self._state_transform is not None:
+            all_trajs = self._state_transform.transform_trajectory(all_trajs)
+
+        y_t = all_trajs[:, :, :-1, :].reshape(B * n_trans, S)
+        y_next = all_trajs[:, :, 1:, :].reshape(B * n_trans, S)
+
+        ctx = torch.stack([item.context.context_vector for item in items])
+        ctx_expanded = ctx.unsqueeze(1).expand(B, n_trans, -1).reshape(B * n_trans, -1)
+
+        t_single = items[0].times[:-1].repeat(M)  # (n_trans,)
+        t_all = t_single.repeat(B)  # (B * n_trans,)
+
+        mu, variance = self._model.predict_transition(t_all, y_t, ctx_expanded, dt)
+        element_loss = self._step_loss.compute(y_next, mu, variance)
+
+        masks = torch.stack([item.species_mask for item in items])
+        return self._reduce_element_loss(element_loss, masks, B, n_trans, S)
+
+    def _batched_rollout_loss(self, items: list[PreparedItem]) -> torch.Tensor:
+        """Compute loss via batched ODE/SDE rollout across all items.
+
+        Integrates all B items forward in lockstep. At each Euler step,
+        one batched drift_from_context call processes all items.
+
+        For T=100, this is 99 batched GPU calls instead of B sequential
+        solver.solve() calls.
 
         Args:
             items: List of B PreparedItems from _prepare_batch().
 
         Returns:
-            Scalar mean step loss.
+            Scalar mean loss.
         """
         B = len(items)
         dt = (items[0].times[1] - items[0].times[0]).item()
-
         M, T, S = items[0].true_trajs_padded.shape
-        n_trans = M * (T - 1)  # transitions per item
 
-        # Stack trajectories: (B, M, T, S)
-        all_trajs = torch.stack([item.true_trajs_padded for item in items])
+        ctx = torch.stack([item.context.context_vector for item in items])
+
+        true_trajs = torch.stack([item.true_trajs_padded for item in items])
         if self._state_transform is not None:
-            all_trajs = self._state_transform.transform_trajectory(all_trajs)
+            true_trajs = self._state_transform.transform_trajectory(true_trajs)
 
-        # Extract transitions: (B * n_trans, S)
-        y_t = all_trajs[:, :, :-1, :].reshape(B * n_trans, S)
-        y_next = all_trajs[:, :, 1:, :].reshape(B * n_trans, S)
+        # Initial states: first time step of each trajectory
+        states = true_trajs[:, :, 0, :].clone()  # (B, M, S)
 
-        # Expand context vectors: (B, d_context) -> (B * n_trans, d_context)
-        ctx_vectors = torch.stack([item.context.context_vector for item in items])
-        ctx_expanded = (
-            ctx_vectors.unsqueeze(1).expand(B, n_trans, -1).reshape(B * n_trans, -1)
-        )
+        # Flatten B and M for batched drift calls
+        BM = B * M
+        states_flat = states.reshape(BM, S)
+        ctx_flat = ctx.unsqueeze(1).expand(B, M, -1).reshape(BM, -1)
 
-        # Time tensor: all items share the same time grid
-        t_single = items[0].times[:-1].repeat(M)  # (n_trans,)
-        t_all = t_single.repeat(B)  # (B * n_trans,)
+        predicted = [states_flat.clone()]
+        t_grid = items[0].times
 
-        # ONE batched forward pass via polymorphic predict_transition
-        mu, variance = self._model.predict_transition(t_all, y_t, ctx_expanded, dt)
+        for t_idx in range(T - 1):
+            t_val = t_grid[t_idx].expand(BM)
+            drift = self._model.drift_from_context(t_val, states_flat, ctx_flat)
+            states_flat = states_flat + drift * dt
+            if self._solver.clip_state:
+                states_flat = states_flat.clamp(min=0.0)
+            predicted.append(states_flat.clone())
 
-        # Polymorphic loss (MSE for ODE, NLL for SDE)
-        element_loss = self._step_loss.compute(y_next, mu, variance)  # (B * n_trans, S)
+        # (T, BM, S) -> (BM, T, S) -> (B, M, T, S) -> (B*M*T, S)
+        pred_traj = torch.stack(predicted, dim=0).permute(1, 0, 2)
+        pred_flat = pred_traj.reshape(B * M * T, S)
+        true_flat = true_trajs.reshape(B * M * T, S)
+        variance = torch.zeros_like(pred_flat)
 
-        # Apply species masks and normalize per item
-        masks = torch.stack([item.species_mask for item in items])  # (B, S)
-        masks_expanded = masks.unsqueeze(1).expand(B, n_trans, S)  # (B, n_trans, S)
+        element_loss = self._step_loss.compute(true_flat, pred_flat, variance)
 
-        element_loss_reshaped = element_loss.reshape(B, n_trans, S)
-        masked_loss = element_loss_reshaped * masks_expanded.float()
+        masks = torch.stack([item.species_mask for item in items])
+        return self._reduce_element_loss(element_loss, masks, B, M * T, S)
 
-        # Per-item mean: sum over transitions and species, divide by (n_trans * n_active)
+    def _reduce_element_loss(
+        self,
+        element_loss: torch.Tensor,
+        masks: torch.Tensor,
+        B: int,
+        N: int,
+        S: int,
+    ) -> torch.Tensor:
+        """Apply species masks and reduce to a scalar mean loss.
+
+        Each item contributes equally regardless of its number of active species.
+
+        Args:
+            element_loss: (B * N, S) per-element loss values.
+            masks: (B, S) bool species masks.
+            B: Batch size.
+            N: Number of loss elements per item (n_transitions or n_timepoints).
+            S: Padded species dimension.
+
+        Returns:
+            Scalar mean loss.
+        """
+        masks_expanded = masks.unsqueeze(1).expand(B, N, S)
+        loss_reshaped = element_loss.reshape(B, N, S)
+        masked_loss = loss_reshaped * masks_expanded.float()
+
         loss_per_item = masked_loss.sum(dim=(1, 2))  # (B,)
         n_dims_per_item = masks.float().sum(dim=1)  # (B,)
-        loss_per_item = loss_per_item / (n_trans * n_dims_per_item)  # (B,)
+        loss_per_item = loss_per_item / (N * n_dims_per_item)
 
         return loss_per_item.mean()
 
@@ -502,8 +535,8 @@ class Trainer:
 
         Args:
             val_cache: Pre-built DataCache for the validation set.
-            compute_rollout: If True, also compute the full SDE rollout loss
-                (expensive). If False, only compute teacher-forcing step loss.
+            compute_rollout: If True, also compute the batched rollout loss.
+                If False, only compute the teacher-forcing step loss.
 
         Returns:
             Tuple of (rollout_loss, step_loss). rollout_loss is 0.0 when
@@ -511,40 +544,18 @@ class Trainer:
         """
         self._encoder.eval()
         self._model.eval()
-        total_rollout = 0.0
         total_step = 0.0
+        total_rollout = 0.0
         n_batches = 0
+
         with torch.no_grad():
             for batch_indices in self._make_batches(val_cache, shuffle=False):
                 batch = val_cache.get_batch(batch_indices)
-                B = len(batch["crn_reprs"])
-
-                # Single batched encoder pass — shared by step loss and rollout
                 items = self._prepare_batch(batch)
 
-                total_step += self._compute_batch_step_loss(items).item()
-
+                total_step += self._teacher_forcing_loss(items).item()
                 if compute_rollout:
-                    rollout_total = torch.zeros(1, device=self._device)
-                    for item in items:
-                        k = self._train_config.n_sde_samples
-                        pred_samples = [
-                            self._solver.solve(
-                                self._model,
-                                item.init_state_padded.clone(),
-                                item.context,
-                                item.times,
-                                self._train_config.dt,
-                            ).states
-                            for _ in range(k)
-                        ]
-                        pred_states = torch.stack(pred_samples, dim=0)
-                        rollout_total = rollout_total + self._rollout_loss.compute(
-                            pred_states,
-                            item.true_trajs_padded,
-                            mask=item.species_mask,
-                        )
-                    total_rollout += (rollout_total / B).item()
+                    total_rollout += self._batched_rollout_loss(items).item()
 
                 n_batches += 1
 

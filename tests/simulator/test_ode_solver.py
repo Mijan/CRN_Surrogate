@@ -123,3 +123,14 @@ def test_drift_only_no_diffusion_call(small_sde_config: SDEConfig) -> None:
     # NeuralDrift has no diffusion(); if solver tried to call it, AttributeError.
     traj = solver.solve(model, initial, ctx, T_SPAN, DT)
     assert isinstance(traj, Trajectory)
+
+
+# ── clip_state property ───────────────────────────────────────────────────────
+
+
+def test_clip_state_property_true() -> None:
+    assert _make_solver(clip=True).clip_state is True
+
+
+def test_clip_state_property_false() -> None:
+    assert _make_solver(clip=False).clip_state is False

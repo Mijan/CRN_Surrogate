@@ -110,3 +110,14 @@ def test_requires_stochastic_model(small_sde_config: SDEConfig) -> None:
     initial = torch.tensor([1.0, 1.0])
     with pytest.raises(AttributeError):
         solver.solve(drift_only, initial, ctx, T_SPAN, DT)
+
+
+# ── clip_state property ───────────────────────────────────────────────────────
+
+
+def test_clip_state_property_true() -> None:
+    assert _make_solver(clip=True).clip_state is True
+
+
+def test_clip_state_property_false() -> None:
+    assert _make_solver(clip=False).clip_state is False

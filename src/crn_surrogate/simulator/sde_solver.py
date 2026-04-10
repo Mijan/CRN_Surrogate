@@ -30,6 +30,11 @@ class EulerMaruyamaSolver:
         self._config = config
         self._state_transform = state_transform
 
+    @property
+    def clip_state(self) -> bool:
+        """Whether to clip state to non-negative values after each Euler-Maruyama step."""
+        return self._config.clip_state
+
     def solve(
         self,
         model: SurrogateModel,
