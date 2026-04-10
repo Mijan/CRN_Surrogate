@@ -11,6 +11,7 @@ from crn_surrogate.simulation.data_simulator import ODESimulator, SSASimulator
 from crn_surrogate.simulator.neural_sde import NeuralDrift, NeuralSDE
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
+from crn_surrogate.training.losses import MSEStepLoss, NLLStepLoss
 from experiments.builders import (
     build_data_simulator,
     build_dataset_generator_config,
@@ -19,6 +20,7 @@ from experiments.builders import (
     build_model_config,
     build_sde_config,
     build_simulator,
+    build_step_loss,
     build_training_config,
     select_device,
 )
@@ -47,6 +49,9 @@ def make_test_cfg(**overrides):
             "scheduler_type": "cosine",
             "val_every": 5,
             "checkpoint_every": 0,
+            "num_workers": 0,
+            "shuffle_train": True,
+            "gpu_memory_fraction": 0.5,
         },
         "solver": {
             "deterministic": False,
@@ -213,6 +218,30 @@ def test_build_dataset_generator_config() -> None:
     assert gen_cfg.topology.n_species_range == (1, 3)
     assert gen_cfg.topology.n_reactions_range == (2, 4)
     assert gen_cfg.rate_constant_range == (0.01, 10.0)
+
+
+# ── Step loss ─────────────────────────────────────────────────────────────────
+
+
+def test_build_step_loss_deterministic() -> None:
+    cfg = make_test_cfg(
+        solver={"deterministic": True, "use_log1p": False, "clip_state": True}
+    )
+    loss = build_step_loss(cfg, torch.device("cpu"))
+    assert isinstance(loss, MSEStepLoss)
+
+
+def test_build_step_loss_stochastic() -> None:
+    cfg = make_test_cfg()
+    loss = build_step_loss(cfg, torch.device("cpu"))
+    assert isinstance(loss, NLLStepLoss)
+
+
+def test_build_step_loss_stochastic_has_measurement_model() -> None:
+    cfg = make_test_cfg()
+    loss = build_step_loss(cfg, torch.device("cpu"))
+    assert isinstance(loss, NLLStepLoss)
+    assert loss.measurement_model is not None
 
 
 # ── Device selection ──────────────────────────────────────────────────────────

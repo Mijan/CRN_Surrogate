@@ -129,6 +129,38 @@ def build_training_config(cfg: DictConfig, *, use_wandb: bool = True) -> Trainin
         wandb_run_name=f"{cfg.experiment_name}_train",
         num_workers=t.num_workers,
         shuffle_train=t.shuffle_train,
+        gpu_memory_fraction=t.gpu_memory_fraction,
+    )
+
+
+def build_step_loss(cfg: DictConfig, device: torch.device):
+    """Build the appropriate per-transition loss for the training regime.
+
+    Deterministic (ODE) models get MSEStepLoss.
+    Stochastic (SDE) models get NLLStepLoss with a MeasurementModel.
+
+    Args:
+        cfg: Fully resolved Hydra config.
+        device: Target device for measurement model parameters.
+
+    Returns:
+        BatchedStepLoss instance (MSEStepLoss or NLLStepLoss).
+    """
+    from crn_surrogate.training.losses import MSEStepLoss, NLLStepLoss
+
+    if cfg.solver.deterministic:
+        return MSEStepLoss()
+
+    from crn_surrogate.measurement.direct import DirectObservation
+
+    meas_config = _build_measurement_config(cfg)
+    measurement_model = DirectObservation.from_config(
+        meas_config,
+        n_species=cfg.model.max_n_reactions,
+    ).to(device)
+    return NLLStepLoss(
+        measurement_model=measurement_model,
+        min_variance=cfg.measurement.min_variance,
     )
 
 

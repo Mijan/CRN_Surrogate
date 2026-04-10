@@ -273,6 +273,117 @@ class TransitionNLL(nn.Module):
 GaussianTransitionNLL = TransitionNLL  # backward compatibility
 
 
+class BatchedStepLoss(ABC):
+    """Per-transition loss on batched (N, S) tensors.
+
+    Implementations define how to score the one-step prediction
+    y_next vs mu given the process variance from the SDE diffusion.
+    """
+
+    @abstractmethod
+    def compute(
+        self,
+        y_next: torch.Tensor,
+        mu: torch.Tensor,
+        process_variance: torch.Tensor,
+        species_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute per-element loss.
+
+        Args:
+            y_next: (N, S) observed next state.
+            mu: (N, S) predicted next state (y_t + drift * dt).
+            process_variance: (N, S) process variance from SDE diffusion.
+                Zero for deterministic models.
+            species_mask: (S,) or (B, S) optional bool mask.
+
+        Returns:
+            (N, S) per-element loss (not reduced).
+        """
+
+
+class MSEStepLoss(BatchedStepLoss):
+    """Squared error loss for deterministic (ODE) surrogates.
+
+    Ignores process_variance entirely. No noise model, no variance floor.
+    """
+
+    def compute(
+        self,
+        y_next: torch.Tensor,
+        mu: torch.Tensor,
+        process_variance: torch.Tensor,
+        species_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute squared residuals.
+
+        Args:
+            y_next: (N, S) observed next state.
+            mu: (N, S) predicted next state.
+            process_variance: (N, S) ignored.
+            species_mask: (S,) or (B, S) optional bool mask (unused here).
+
+        Returns:
+            (N, S) squared residuals.
+        """
+        return (y_next - mu) ** 2
+
+
+class NLLStepLoss(BatchedStepLoss):
+    """Gaussian NLL loss for stochastic (SDE) surrogates.
+
+    Combines process variance from the SDE diffusion with observation
+    variance from a MeasurementModel. Falls back to process-only Gaussian
+    NLL when no measurement model is provided.
+    """
+
+    def __init__(
+        self,
+        measurement_model: MeasurementModel | None = None,
+        min_variance: float = 1e-2,
+    ) -> None:
+        """Args:
+        measurement_model: Optional model for combining process and observation
+            variance. When None, uses process variance only (Gaussian NLL).
+        min_variance: Floor applied to process variance before NLL computation.
+        """
+        self._measurement_model = measurement_model
+        self._min_variance = min_variance
+
+    @property
+    def measurement_model(self) -> MeasurementModel | None:
+        """The measurement model, if any (needed for optimizer param collection)."""
+        return self._measurement_model
+
+    def compute(
+        self,
+        y_next: torch.Tensor,
+        mu: torch.Tensor,
+        process_variance: torch.Tensor,
+        species_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compute Gaussian NLL, combining process and observation variance.
+
+        Args:
+            y_next: (N, S) observed next state.
+            mu: (N, S) predicted next state.
+            process_variance: (N, S) process variance from SDE diffusion.
+            species_mask: (S,) or (B, S) optional bool mask (unused here).
+
+        Returns:
+            (N, S) per-element NLL.
+        """
+        variance = process_variance.clamp(min=self._min_variance)
+        if self._measurement_model is not None:
+            return -self._measurement_model.log_likelihood(
+                y_observed=y_next,
+                x_predicted=mu,
+                process_variance=variance,
+            )
+        residual = y_next - mu
+        return 0.5 * (residual**2 / variance + variance.log())
+
+
 class CombinedTrajectoryLoss(TrajectoryLoss):
     """Weighted sum of multiple TrajectoryLoss instances.
 

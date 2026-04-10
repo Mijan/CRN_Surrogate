@@ -10,9 +10,10 @@ from crn_surrogate.configs.training_config import TrainingConfig
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.training.trainer import Trainer, TrainingResult
 from experiments.builders import (
+    build_encoder_config,
     build_model,
-    build_model_config,
     build_simulator,
+    build_step_loss,
     build_training_config,
     select_device,
 )
@@ -44,10 +45,10 @@ class TrainingRunner:
             )
 
             # Model
-            model_config = build_model_config(self._cfg)
-            encoder = BipartiteGNNEncoder(model_config.encoder).to(device)
+            encoder = BipartiteGNNEncoder(build_encoder_config(self._cfg)).to(device)
             model = build_model(self._cfg, device)
             simulator = build_simulator(self._cfg)
+            step_loss = build_step_loss(self._cfg, device)
             train_config = build_training_config(self._cfg, use_wandb=session.active)
 
             print(f"Encoder params: {sum(p.numel() for p in encoder.parameters()):,}")
@@ -55,7 +56,7 @@ class TrainingRunner:
 
             # Resume
             trainer = Trainer(
-                encoder, model, model_config, train_config, simulator=simulator
+                encoder, model, train_config, simulator=simulator, step_loss=step_loss
             )
             start_epoch = self._handle_resume(trainer, encoder, model, device)
 

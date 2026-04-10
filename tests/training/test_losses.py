@@ -13,6 +13,8 @@ from crn_surrogate.simulator.neural_sde import NeuralSDE
 from crn_surrogate.training.losses import (
     CombinedTrajectoryLoss,
     MeanMatchingLoss,
+    MSEStepLoss,
+    NLLStepLoss,
     TransitionNLL,
     VarianceMatchingLoss,
 )
@@ -159,6 +161,108 @@ def test_nll_2d_trajectory_auto_unsqueeze(nll_setup) -> None:
     result = TransitionNLL().compute(sde, ctx, traj_2d, times, dt=0.25)
     assert result.dim() == 0
     assert torch.isfinite(result)
+
+
+# ── MSEStepLoss ───────────────────────────────────────────────────────────────
+
+
+def test_mse_step_loss_shape() -> None:
+    N, S = 100, 3
+    loss_fn = MSEStepLoss()
+    y_next = torch.rand(N, S)
+    mu = torch.rand(N, S)
+    variance = torch.rand(N, S)
+    out = loss_fn.compute(y_next, mu, variance)
+    assert out.shape == (N, S)
+
+
+def test_mse_step_loss_zero_on_perfect() -> None:
+    N, S = 50, 4
+    y = torch.rand(N, S)
+    out = MSEStepLoss().compute(y, y, torch.rand(N, S))
+    assert out.abs().max().item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_mse_step_loss_ignores_variance() -> None:
+    y_next = torch.rand(20, 3)
+    mu = torch.rand(20, 3)
+    v1 = torch.ones(20, 3)
+    v2 = torch.ones(20, 3) * 100.0
+    out1 = MSEStepLoss().compute(y_next, mu, v1)
+    out2 = MSEStepLoss().compute(y_next, mu, v2)
+    torch.testing.assert_close(out1, out2)
+
+
+def test_mse_step_loss_positive() -> None:
+    y_next = torch.rand(20, 3) + 1.0
+    mu = torch.zeros(20, 3)
+    out = MSEStepLoss().compute(y_next, mu, torch.zeros(20, 3))
+    assert (out > 0).all()
+
+
+# ── NLLStepLoss ───────────────────────────────────────────────────────────────
+
+
+def test_nll_step_loss_shape() -> None:
+    N, S = 100, 3
+    loss_fn = NLLStepLoss()
+    y_next = torch.rand(N, S) * 10 + 1
+    mu = torch.rand(N, S) * 10 + 1
+    variance = torch.rand(N, S) * 0.1 + 0.01
+    out = loss_fn.compute(y_next, mu, variance)
+    assert out.shape == (N, S)
+
+
+def test_nll_step_loss_finite() -> None:
+    N, S = 50, 2
+    y_next = torch.rand(N, S) * 10 + 1
+    mu = torch.rand(N, S) * 10 + 1
+    variance = torch.rand(N, S) * 0.5 + 0.1
+    out = NLLStepLoss(min_variance=1e-2).compute(y_next, mu, variance)
+    assert torch.isfinite(out).all()
+
+
+def test_nll_step_loss_with_measurement_model() -> None:
+    N, S = 30, 2
+    y_next = torch.rand(N, S) * 10 + 1
+    mu = torch.rand(N, S) * 10 + 1
+    variance = torch.rand(N, S) * 0.1 + 0.01
+
+    meas = DirectObservation.from_config(MeasurementConfig(), n_species=S)
+    out_no_meas = NLLStepLoss().compute(y_next, mu, variance)
+    out_with_meas = NLLStepLoss(measurement_model=meas).compute(y_next, mu, variance)
+
+    assert out_no_meas.shape == (N, S)
+    assert out_with_meas.shape == (N, S)
+    # Outputs differ because measurement model adds observation noise
+    assert not torch.allclose(out_no_meas, out_with_meas)
+
+
+def test_nll_step_loss_gradient_flows_through_measurement() -> None:
+    N, S = 20, 2
+    meas = DirectObservation.from_config(MeasurementConfig(), n_species=S)
+    y_next = torch.rand(N, S) * 10 + 1
+    mu = torch.rand(N, S) * 10 + 1
+    variance = torch.rand(N, S) * 0.1 + 0.01
+
+    loss = NLLStepLoss(measurement_model=meas).compute(y_next, mu, variance).sum()
+    loss.backward()
+
+    meas_param = next(meas.parameters())
+    assert meas_param.grad is not None
+    assert meas_param.grad.abs().sum().item() > 0
+
+
+def test_mse_vs_nll_differ() -> None:
+    N, S = 40, 3
+    y_next = torch.rand(N, S) * 5 + 1
+    mu = torch.rand(N, S) * 5 + 1
+    variance = torch.rand(N, S) * 0.5 + 0.1
+
+    mse_out = MSEStepLoss().compute(y_next, mu, variance)
+    nll_out = NLLStepLoss().compute(y_next, mu, variance)
+
+    assert not torch.allclose(mse_out, nll_out)
 
 
 # ── CombinedTrajectoryLoss ────────────────────────────────────────────────────

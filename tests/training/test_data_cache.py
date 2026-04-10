@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from crn_surrogate.configs.model_config import EncoderConfig, ModelConfig, SDEConfig
+from crn_surrogate.configs.model_config import EncoderConfig, SDEConfig
 from crn_surrogate.configs.solver_config import SolverConfig
 from crn_surrogate.configs.training_config import SchedulerType, TrainingConfig
 from crn_surrogate.crn.crn import CRN
@@ -14,11 +14,11 @@ from crn_surrogate.crn.reaction import Reaction
 from crn_surrogate.data.dataset import CRNTrajectoryDataset, TrajectoryItem
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder
 from crn_surrogate.encoder.tensor_repr import crn_to_tensor_repr
-from crn_surrogate.measurement.config import MeasurementConfig
 from crn_surrogate.simulator.neural_sde import NeuralSDE
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
 from crn_surrogate.simulator.state_transform import get_state_transform
 from crn_surrogate.training.data_cache import DataCache
+from crn_surrogate.training.losses import MSEStepLoss
 from crn_surrogate.training.trainer import Trainer
 
 N_ITEMS = 5
@@ -96,15 +96,12 @@ def test_shuffled_batches_cover_all_items() -> None:
     cache = DataCache.from_dataset(dataset, torch.device("cpu"), N_SPECIES_PAD)
 
     # Build a minimal Trainer just for _make_batches
-    model_config = ModelConfig(
-        encoder=EncoderConfig(d_model=16, n_layers=1, use_attention=False),
-        sde=SDEConfig(
-            d_model=16, d_hidden=32, n_noise_channels=N_SPECIES, n_hidden_layers=1
-        ),
-        measurement=MeasurementConfig(),
+    enc_config = EncoderConfig(d_model=16, n_layers=1, use_attention=False)
+    sde_config = SDEConfig(
+        d_model=16, d_hidden=32, n_noise_channels=N_SPECIES, n_hidden_layers=1
     )
-    encoder = BipartiteGNNEncoder(model_config.encoder)
-    model = NeuralSDE(model_config.sde, n_species=N_SPECIES_PAD)
+    encoder = BipartiteGNNEncoder(enc_config)
+    model = NeuralSDE(sde_config, n_species=N_SPECIES_PAD)
     train_config = TrainingConfig(
         batch_size=2,
         max_epochs=1,
@@ -116,7 +113,7 @@ def test_shuffled_batches_cover_all_items() -> None:
     solver = EulerMaruyamaSolver(
         SolverConfig(), state_transform=get_state_transform(False)
     )
-    trainer = Trainer(encoder, model, model_config, train_config, solver)
+    trainer = Trainer(encoder, model, train_config, solver, step_loss=MSEStepLoss())
 
     batches = trainer._make_batches(cache, shuffle=True)
     all_indices = torch.cat(batches)

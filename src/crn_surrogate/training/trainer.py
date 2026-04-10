@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 from tqdm import tqdm
 
-from crn_surrogate.configs.model_config import ModelConfig
 from crn_surrogate.configs.training_config import (
     SchedulerType,
     TrainingConfig,
@@ -16,7 +15,6 @@ from crn_surrogate.configs.training_config import (
 )
 from crn_surrogate.data.dataset import CRNTrajectoryDataset
 from crn_surrogate.encoder.bipartite_gnn import BipartiteGNNEncoder, CRNContext
-from crn_surrogate.measurement.direct import DirectObservation
 from crn_surrogate.simulator.base import StochasticSurrogate, SurrogateModel
 from crn_surrogate.simulator.ode_solver import EulerODESolver
 from crn_surrogate.simulator.sde_solver import EulerMaruyamaSolver
@@ -24,9 +22,10 @@ from crn_surrogate.simulator.state_transform import StateTransform
 from crn_surrogate.training.checkpointing import CheckpointManager
 from crn_surrogate.training.data_cache import DataCache
 from crn_surrogate.training.losses import (
+    BatchedStepLoss,
     CombinedTrajectoryLoss,
+    NLLStepLoss,
     TrajectoryLoss,
-    TransitionNLL,
 )
 from crn_surrogate.training.profiler import PhaseTimer, ProfileLogger, WandbLogger
 
@@ -88,53 +87,39 @@ class Trainer:
         self,
         encoder: BipartiteGNNEncoder,
         model: SurrogateModel,
-        model_config: ModelConfig,
         train_config: TrainingConfig,
         simulator: EulerMaruyamaSolver | EulerODESolver,
+        step_loss: BatchedStepLoss,
         loss_fn: TrajectoryLoss | None = None,
     ) -> None:
         """Args:
         encoder: The bipartite GNN encoder.
         model: The surrogate model (NeuralDrift or NeuralSDE).
-        model_config: Pipeline configuration covering encoder, SDE architecture,
-            and measurement model. Does NOT configure the surrogate model
-            directly — use the model argument for that.
         train_config: Training hyperparameters.
         simulator: Solver for rollout validation and scheduled-sampling training.
-            Use BaseExperimentConfig.build_simulator() to construct one.
+        step_loss: Per-transition loss (MSEStepLoss for ODE, NLLStepLoss for SDE).
         loss_fn: Rollout loss function. Defaults to CombinedTrajectoryLoss.
             Only used when training_mode is FULL_ROLLOUT or SCHEDULED_SAMPLING.
         """
         self._encoder = encoder
         self._model = model
-        self._model_config = model_config
         self._train_config = train_config
         self._rollout_loss = (
             loss_fn if loss_fn is not None else CombinedTrajectoryLoss()
         )
         self._state_transform: StateTransform = StateTransform()
         self._solver: EulerMaruyamaSolver | EulerODESolver = simulator
+        self._step_loss = step_loss
 
         self._device = next(encoder.parameters(), torch.zeros(1)).device
 
-        # Construct measurement model and NLL loss
-        measurement_config = model_config.measurement
-        self._measurement_model: DirectObservation = DirectObservation.from_config(
-            measurement_config,
-            n_species=model_config.sde.n_noise_channels,
-        )
-        self._measurement_model.to(self._device)
+        params = list(encoder.parameters()) + list(model.parameters())
+        if (
+            isinstance(step_loss, NLLStepLoss)
+            and step_loss.measurement_model is not None
+        ):
+            params += list(step_loss.measurement_model.parameters())
 
-        self._nll_loss = TransitionNLL(
-            measurement_model=self._measurement_model,
-            min_variance=measurement_config.min_variance,
-        )
-
-        params = (
-            list(encoder.parameters())
-            + list(model.parameters())
-            + list(self._measurement_model.parameters())
-        )
         self._optimizer = torch.optim.AdamW(
             params,
             lr=train_config.lr,
@@ -156,10 +141,7 @@ class Trainer:
             import dataclasses
 
             self._wandb = WandbLogger(
-                config={
-                    **dataclasses.asdict(train_config),
-                    **dataclasses.asdict(model_config),
-                },
+                config=dataclasses.asdict(train_config),
                 project=train_config.wandb_project,
                 run_name=train_config.wandb_run_name,
             )
@@ -244,11 +226,14 @@ class Trainer:
                     metrics["val_nll"] = val_nll
                 if val_loss is not None and val_loss != 0.0:
                     metrics["val_loss"] = val_loss
-                if self._measurement_model is not None and hasattr(
-                    self._measurement_model, "eps"
+                if (
+                    isinstance(self._step_loss, NLLStepLoss)
+                    and self._step_loss.measurement_model is not None
+                    and hasattr(self._step_loss.measurement_model, "eps")
                 ):
-                    eps_val = self._measurement_model.eps
-                    metrics["obs_eps"] = eps_val.mean().item()
+                    metrics["obs_eps"] = (
+                        self._step_loss.measurement_model.eps.mean().item()
+                    )
                 self._wandb.log_epoch(metrics)
                 self._wandb.log_phase_timings(self._timer)
 
@@ -279,13 +264,14 @@ class Trainer:
             self._optimizer,
             self._scheduler,
         )
-        if (
-            "measurement_model_state" in checkpoint
-            and self._measurement_model is not None
-        ):
-            self._measurement_model.load_state_dict(
-                checkpoint["measurement_model_state"]
-            )
+        if "measurement_model_state" in checkpoint:
+            if (
+                isinstance(self._step_loss, NLLStepLoss)
+                and self._step_loss.measurement_model is not None
+            ):
+                self._step_loss.measurement_model.load_state_dict(
+                    checkpoint["measurement_model_state"]
+                )
         return start_epoch
 
     def _build_state(self, epoch: int, **extra) -> dict:
@@ -309,8 +295,13 @@ class Trainer:
             "best_val_loss": self._checkpoint_mgr.best_val_loss,
             **extra,
         }
-        if self._measurement_model is not None:
-            state["measurement_model_state"] = self._measurement_model.state_dict()
+        if (
+            isinstance(self._step_loss, NLLStepLoss)
+            and self._step_loss.measurement_model is not None
+        ):
+            state["measurement_model_state"] = (
+                self._step_loss.measurement_model.state_dict()
+            )
         return state
 
     def _make_batches(self, cache: DataCache, shuffle: bool) -> list[torch.Tensor]:
@@ -350,8 +341,11 @@ class Trainer:
             all_params = list(self._encoder.parameters()) + list(
                 self._model.parameters()
             )
-            if self._measurement_model is not None:
-                all_params += list(self._measurement_model.parameters())
+            if (
+                isinstance(self._step_loss, NLLStepLoss)
+                and self._step_loss.measurement_model is not None
+            ):
+                all_params += list(self._step_loss.measurement_model.parameters())
             total_norm = nn.utils.clip_grad_norm_(
                 all_params,
                 self._train_config.grad_clip_norm,
@@ -432,7 +426,10 @@ class Trainer:
         if mode == TrainingMode.TEACHER_FORCING:
             return self._compute_batch_nll_batched(items)
 
-        # Rollout modes stay sequential (each item needs K independent SDE solves)
+        return self._compute_batch_rollout(B, items)
+
+    def _compute_batch_rollout(self, B: int, items: list[PreparedItem]) -> torch.Tensor:
+        # Rollout modes stay sequential (each item needs K independent simulations)
         total = torch.zeros(1, device=self._device)
         for item in items:
             k = self._train_config.n_sde_samples
@@ -473,7 +470,7 @@ class Trainer:
             would produce, up to floating point ordering).
         """
         B = len(items)
-        dt = self._train_config.dt
+        dt = (items[0].times[1] - items[0].times[0]).item()
 
         M, T, S = items[0].true_trajs_padded.shape
         n_trans = M * (T - 1)  # transitions per item
@@ -509,24 +506,11 @@ class Trainer:
         if isinstance(self._model, StochasticSurrogate):
             all_G = self._model.diffusion_from_context(t_all, y_t, ctx_expanded, None)
             variance = (all_G**2).sum(dim=-1) * dt  # (B * n_trans, S)
-            variance = variance.clamp(min=self._nll_loss._min_variance)
         else:
-            # Deterministic model: process variance is zero; measurement model
-            # provides the observation noise floor via its own min_variance clamp.
             variance = torch.zeros_like(mu)
 
-        if self._measurement_model is not None:
-            # Combine process and observation variance via the measurement model
-            log_lik = self._measurement_model.log_likelihood(
-                y_observed=y_next,
-                x_predicted=mu,
-                process_variance=variance,
-            )
-            nll = -log_lik  # (B * n_trans, S)
-        else:
-            # Legacy: Gaussian NLL with process variance only
-            residual = y_next - mu
-            nll = 0.5 * (residual**2 / variance + variance.log())  # (B * n_trans, S)
+        # Polymorphic loss (MSE for ODE, NLL for SDE)
+        nll = self._step_loss.compute(y_next, mu, variance)  # (B * n_trans, S)
 
         # Apply species masks and normalize per item
         masks = torch.stack([item.species_mask for item in items])  # (B, S)
